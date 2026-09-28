@@ -2,11 +2,13 @@
 
 Adds a CI/CD template bundle to one GitLab project, as a single merge
 request -- `.gitlab-ci.yml`, plus whatever else that template needs (e.g.
-`.m2/settings.xml` for the Maven templates). All template content lives in
-this repo: `.gitlab-ci.yml` files under [templates/](templates/), other
-bundled files (settings.xml, .npmrc, etc.) under [files/](files/) -- read
-straight off disk in the CI job's own checkout, no fetch from any other
-project.
+`.m2/settings.xml` for the Maven templates). Each bundle file's content
+comes from one of two places, per file: the main `.gitlab-ci.yml` is fetched
+from the centralized `dso-templates/ci-cd-components/pipeline-templates`
+project (its `templates/` folder already names files exactly like our
+template names); additional files this tool owns, like `settings.xml` with
+Nexus/Artifactory credentials, are local to this repo (see [files/](files/))
+since they have no reason to live in the shared templates project.
 
 This is a **separate tool from [gitlab-post-migration](../gitlab-post-migration)**
 on purpose: template choice is a per-project, human decision made via a
@@ -40,15 +42,17 @@ Stages: `build → suggest → plan → apply`
 
 ## Configuration
 
-- [configs/templates.yaml](configs/templates.yaml) -- all 29 templates, each
-  with the list of files it bundles. Every file has a `target_path` (where
-  it lands in the destination project) and a `source_path` (a path in this
-  repo -- `templates/*.gitlab.yml` or `files/*`).
-- [templates/](templates/) -- the `.gitlab-ci.yml` content for every
-  template. **All 29 are placeholder stubs right now** (see Known gaps).
-- [files/](files/) -- content for the other bundled files, versioned
+- [configs/templates.yaml](configs/templates.yaml) -- `remote_source` names
+  the centralized pipeline-templates project + ref; below that, all 29
+  templates, each with the list of files it bundles. Every file has a
+  `target_path` (where it lands in the destination project) and a
+  `source_path`; unless a file sets `source: local`, `source_path` is
+  resolved against `remote_source`. Only Maven/Node/Python/.NET/Flyway
+  templates currently bundle a local extra file alongside the remote
+  `.gitlab-ci.yml`.
+- [files/](files/) -- content for the locally-sourced bundle files, versioned
   and reviewed like code, same as the rest of this repo. All placeholders
-  right now too (see Known gaps):
+  right now (see Known gaps):
 
   | File | Bundled with | Auto-discovered by the build tool? |
   |---|---|---|
@@ -67,8 +71,8 @@ Stages: `build → suggest → plan → apply`
   CI can't generate dropdown options from a file at pipeline-definition
   time.
 - `GITLAB_TOKEN` CI/CD variable (masked/protected) -- needs `api` scope and
-  `write_repository` on the target project(s). (No access to any other
-  project needed -- template content is local to this repo.)
+  `write_repository` on the target project(s), plus read access to
+  `dso-templates/ci-cd-components/pipeline-templates`.
 
 ## Local usage
 
@@ -84,18 +88,21 @@ export GITLAB_TOKEN=...
 
 ## Known gaps
 
-- Every file under `templates/` and `files/` is a placeholder stub (a
-  trivial `echo "TODO"` pipeline, or a `settings.xml`/`.npmrc`/etc. with
-  `TODO` mirror URLs and credentials) -- replace each with the real
-  converted AZDO pipeline content and real registry credentials before
-  relying on this for anything.
-- **Several bundled files only take effect if the template's own script
-  actually references them** -- `.npmrc` and `nuget.config` are
-  auto-discovered by npm/NuGet with no extra step, but `.m2/settings.xml`,
-  `pip.conf`, and `flyway.conf` all need an explicit flag/env-var in that
-  template's `templates/*.gitlab.yml` (`mvn -s .m2/settings.xml`,
-  `PIP_CONFIG_FILE=...`, `flyway -configFiles=...`) or bundling them is a
-  no-op.
+- Every file under `files/` has `TODO` placeholders (mirror URLs,
+  credentials) -- fill in real values before relying on this.
+- **Several of these files only take effect if the *remote* pipeline
+  template's script actually references them** -- `.npmrc` and
+  `nuget.config` are auto-discovered by npm/NuGet with no extra step, but
+  `.m2/settings.xml`, `pip.conf`, and `flyway.conf` all need an explicit
+  flag/env-var in the corresponding `dso-templates/ci-cd-components/pipeline-templates`
+  script (`mvn -s .m2/settings.xml`, `PIP_CONFIG_FILE=...`,
+  `flyway -configFiles=...`) or bundling them is a no-op. Worth confirming
+  with whoever maintains that project.
+- Not yet verified that `dso-templates/ci-cd-components/pipeline-templates`'s
+  `templates/` folder file names match `configs/templates.yaml`'s
+  `source_path` values exactly, or that `GITLAB_TOKEN` actually has read
+  access to that project -- both are plausible causes if a `plan`/`apply`
+  job errors fetching a template file.
 - `flyway-cd`'s bundle **replaces** `flyway.conf` on apply -- since its
   `detect` rule only matches when a project already has one (with real,
   per-app DB settings), review the plan output's action (`update` vs
