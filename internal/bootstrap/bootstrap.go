@@ -2,10 +2,13 @@
 // human-picked template name, work out which of the template's files are
 // missing/stale (Plan), then commit all of them in one commit and open a
 // single MR (Apply). Each bundle file's content comes from wherever its
-// FileSpec.Source says: the centralized
-// dso-templates/ci-cd-components/pipeline-templates project (the default,
-// for the main .gitlab-ci.yml) or this tool's own repo checkout (for extra
-// files this tool owns, like settings.xml).
+// FileSpec.Source says: for the main .gitlab-ci.yml (Source == "include",
+// the default), the content is a short GENERATED `include:project` stub
+// pointing at the centralized dso-templates/ci-cd-components/pipeline-templates
+// project -- the shared template's content is referenced, never copied, so
+// this tool makes no API call to that project at all. Locally-sourced files
+// (Source == "local") this tool owns, like settings.xml, are read verbatim
+// from this repo's own checkout.
 //
 // This is deliberately NOT a reconciler over many projects -- template
 // choice is a per-project, human decision (made via the pipeline UI's
@@ -93,7 +96,7 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 	}
 
 	for _, f := range tmpl.Files {
-		desired, err := b.readFile(ctx, f)
+		desired, err := b.content(f)
 		if err != nil {
 			return nil, err
 		}
@@ -152,7 +155,7 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 		if f.Action == "unchanged" {
 			continue
 		}
-		content, err := b.templateContentFor(ctx, plan.Template, f.TargetPath)
+		content, err := b.templateContentFor(plan.Template, f.TargetPath)
 		if err != nil {
 			return nil, err
 		}
@@ -205,12 +208,11 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	return result, nil
 }
 
-// readFile fetches one bundle file's content, from wherever FileSpec.Source
-// says it lives: the shared pipeline-templates project (the default -- the
-// main .gitlab-ci.yml, and any future remote-sourced file) or this tool's
-// own repo checkout (additional files this tool owns, e.g. settings.xml
-// with credentials that have no reason to live in the shared project).
-func (b *Bootstrapper) readFile(ctx context.Context, f config.FileSpec) (string, error) {
+// content resolves one bundle file's desired content, per FileSpec.Source:
+// a local file is read verbatim; an include-sourced file's "content" is a
+// short generated `include:project` stub -- no network call, since nothing
+// is fetched from the shared templates project, only referenced.
+func (b *Bootstrapper) content(f config.FileSpec) (string, error) {
 	if f.IsLocal() {
 		data, err := os.ReadFile(f.SourcePath)
 		if err != nil {
@@ -218,24 +220,32 @@ func (b *Bootstrapper) readFile(ctx context.Context, f config.FileSpec) (string,
 		}
 		return string(data), nil
 	}
-
-	raw, _, err := b.Client.REST.RepositoryFiles.GetRawFile(b.Templates.RemoteSource.ProjectPath, f.SourcePath, &gitlab.GetRawFileOptions{
-		Ref: gitlab.Ptr(b.Templates.RemoteSource.Ref),
-	}, gitlab.WithContext(ctx))
-	if err != nil {
-		return "", fmt.Errorf("fetching %s from %s@%s: %w", f.SourcePath, b.Templates.RemoteSource.ProjectPath, b.Templates.RemoteSource.Ref, err)
-	}
-	return string(raw), nil
+	return includeStub(b.Templates.RemoteSource, f.SourcePath), nil
 }
 
-func (b *Bootstrapper) templateContentFor(ctx context.Context, templateName, targetPath string) (string, error) {
+// includeStub generates a GitLab CI file that does nothing but include the
+// shared template by reference, e.g.:
+//
+//	include:
+//	  - project: dso-templates/ci-cd-components/pipeline-templates
+//	    ref: master
+//	    file: 'templates/java-gradle-openshift-ci-cd.gitlab.yml'
+//
+// This is deliberate: the shared project's content is never copied into
+// the target project, so template updates there apply automatically
+// without this tool needing to re-run.
+func includeStub(remote config.RemoteSource, file string) string {
+	return fmt.Sprintf("include:\n  - project: %s\n    ref: %s\n    file: '%s'\n", remote.ProjectPath, remote.Ref, file)
+}
+
+func (b *Bootstrapper) templateContentFor(templateName, targetPath string) (string, error) {
 	tmpl := b.Templates.Find(templateName)
 	if tmpl == nil {
 		return "", fmt.Errorf("unknown template %q", templateName)
 	}
 	for _, f := range tmpl.Files {
 		if f.TargetPath == targetPath {
-			return b.readFile(ctx, f)
+			return b.content(f)
 		}
 	}
 	return "", fmt.Errorf("template %q has no file spec for target %q", templateName, targetPath)

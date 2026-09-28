@@ -11,15 +11,17 @@ import (
 // Templates is every CI/CD template bundle this tool can add to a project.
 type Templates struct {
 	// RemoteSource is the centralized pipeline-templates project every
-	// template's main .gitlab-ci.yml (Source == SourceRemote, the default)
-	// is fetched from.
+	// template's main .gitlab-ci.yml (Source == SourceInclude, the default)
+	// points at via a GitLab CI `include:project` reference -- see
+	// bootstrap.includeStub. This project's content is never fetched or
+	// copied; only its path/ref/file are referenced.
 	RemoteSource RemoteSource `yaml:"remote_source"`
 	Templates    []Template   `yaml:"templates"`
 }
 
 type RemoteSource struct {
 	ProjectPath string `yaml:"project_path"` // "dso-templates/ci-cd-components/pipeline-templates"
-	Ref         string `yaml:"ref"`
+	Ref         string `yaml:"ref"`          // "master"
 }
 
 // Template is one selectable pipeline-UI option: a name and every file it
@@ -38,20 +40,27 @@ type Template struct {
 }
 
 const (
-	SourceRemote = "remote" // fetched from RemoteSource; this is the default when Source is empty
-	SourceLocal  = "local"  // read from this repo's own checkout
+	// SourceInclude (the default, when Source is empty) means this file's
+	// content is GENERATED as a GitLab CI `include:project` stub pointing
+	// at RemoteSource + SourcePath -- the shared template's content is
+	// referenced, never copied, so future changes to the shared template
+	// apply automatically without needing to re-run this tool.
+	SourceInclude = "include"
+	// SourceLocal means this file's content is copied verbatim from this
+	// repo's own checkout at SourcePath.
+	SourceLocal = "local"
 )
 
 // FileSpec is one file the template bundle manages. Most templates have a
-// single remote-sourced file (the shared .gitlab-ci.yml, from the separate
-// dso-templates/ci-cd-components/pipeline-templates project); a template
-// can also bundle locally-sourced files this tool owns (e.g. settings.xml
-// with Nexus/Artifactory credentials) that have no reason to live in that
-// shared templates project.
+// single include-sourced file (the main .gitlab-ci.yml, referencing the
+// separate dso-templates/ci-cd-components/pipeline-templates project); a
+// template can also bundle locally-sourced files this tool owns (e.g.
+// settings.xml with Nexus/Artifactory credentials) that have no reason to
+// live in, or be referenced from, that shared templates project.
 type FileSpec struct {
 	TargetPath string `yaml:"target_path"`      // path in the destination project
-	SourcePath string `yaml:"source_path"`      // path within RemoteSource, or within this repo if Source == "local"
-	Source     string `yaml:"source,omitempty"` // "remote" (default) or "local"
+	SourcePath string `yaml:"source_path"`      // the `file:` value if Source == "include"; a path in this repo if "local"
+	Source     string `yaml:"source,omitempty"` // "include" (default) or "local"
 }
 
 func (f FileSpec) IsLocal() bool {

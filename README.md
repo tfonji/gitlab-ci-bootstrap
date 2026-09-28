@@ -2,13 +2,24 @@
 
 Adds a CI/CD template bundle to one GitLab project, as a single merge
 request -- `.gitlab-ci.yml`, plus whatever else that template needs (e.g.
-`.m2/settings.xml` for the Maven templates). Each bundle file's content
-comes from one of two places, per file: the main `.gitlab-ci.yml` is fetched
-from the centralized `dso-templates/ci-cd-components/pipeline-templates`
-project (its `templates/` folder already names files exactly like our
-template names); additional files this tool owns, like `settings.xml` with
-Nexus/Artifactory credentials, are local to this repo (see [files/](files/))
-since they have no reason to live in the shared templates project.
+`.m2/settings.xml` for the Maven templates). The `.gitlab-ci.yml` this tool
+adds does **not** copy the shared template's content -- it's a short
+generated stub that `include:`s it by reference from the centralized
+`dso-templates/ci-cd-components/pipeline-templates` project:
+
+```yaml
+include:
+  - project: dso-templates/ci-cd-components/pipeline-templates
+    ref: master
+    file: 'templates/java-gradle-openshift-ci-cd.gitlab.yml'
+```
+
+That means no API call to that project at all (nothing to fetch), and
+future changes to the shared template apply automatically without needing
+to re-run this tool. Additional files this tool owns, like `settings.xml`
+with Nexus/Artifactory credentials, are genuinely local to this repo (see
+[files/](files/)) and copied verbatim, since they have no reason to live in
+or be referenced from the shared templates project.
 
 This is a **separate tool from [gitlab-post-migration](../gitlab-post-migration)**
 on purpose: template choice is a per-project, human decision made via a
@@ -43,13 +54,14 @@ Stages: `build → suggest → plan → apply`
 ## Configuration
 
 - [configs/templates.yaml](configs/templates.yaml) -- `remote_source` names
-  the centralized pipeline-templates project + ref; below that, all 29
-  templates, each with the list of files it bundles. Every file has a
-  `target_path` (where it lands in the destination project) and a
-  `source_path`; unless a file sets `source: local`, `source_path` is
-  resolved against `remote_source`. Only Maven/Node/Python/.NET/Flyway
-  templates currently bundle a local extra file alongside the remote
-  `.gitlab-ci.yml`.
+  the centralized pipeline-templates project + ref used in the generated
+  `include:` stub; below that, all 29 templates, each with the list of
+  files it bundles. Every file has a `target_path` (where it lands in the
+  destination project) and a `source_path`; unless a file sets
+  `source: local`, `source_path` becomes the `include:` stub's `file:`
+  value (see above) rather than being fetched. Only
+  Maven/Node/Python/.NET/Flyway templates currently bundle a local extra
+  file alongside the generated `.gitlab-ci.yml`.
 - [files/](files/) -- content for the locally-sourced bundle files, versioned
   and reviewed like code, same as the rest of this repo. All placeholders
   right now (see Known gaps):
@@ -71,8 +83,14 @@ Stages: `build → suggest → plan → apply`
   CI can't generate dropdown options from a file at pipeline-definition
   time.
 - `GITLAB_TOKEN` CI/CD variable (masked/protected) -- needs `api` scope and
-  `write_repository` on the target project(s), plus read access to
-  `dso-templates/ci-cd-components/pipeline-templates`.
+  `write_repository` on the target project(s) only. This tool itself never
+  reads `dso-templates/ci-cd-components/pipeline-templates` (the
+  `include:` stub only references it) -- but separately, each **target**
+  project's own pipeline needs GitLab-level permission to include from that
+  project when it actually runs (GitLab's own `include:project` access
+  rules), which is unrelated to this tool's token and worth confirming with
+  whoever maintains the shared templates project if a target project's
+  pipeline fails to resolve the include after this MR merges.
 
 ## Local usage
 
@@ -98,11 +116,14 @@ export GITLAB_TOKEN=...
   script (`mvn -s .m2/settings.xml`, `PIP_CONFIG_FILE=...`,
   `flyway -configFiles=...`) or bundling them is a no-op. Worth confirming
   with whoever maintains that project.
-- Not yet verified that `dso-templates/ci-cd-components/pipeline-templates`'s
-  `templates/` folder file names match `configs/templates.yaml`'s
-  `source_path` values exactly, or that `GITLAB_TOKEN` actually has read
-  access to that project -- both are plausible causes if a `plan`/`apply`
-  job errors fetching a template file.
+- Since the `.gitlab-ci.yml` this tool writes is a generated `include:`
+  stub, `plan`/`apply` no longer verify that
+  `configs/templates.yaml`'s `source_path` actually exists in
+  `dso-templates/ci-cd-components/pipeline-templates` -- a wrong path
+  (renamed file, typo) won't surface here at all; it'll only show up when
+  the **target** project's pipeline runs and fails to resolve the include.
+  Worth a periodic spot-check that `source_path` values still match that
+  project's real file names.
 - `flyway-cd`'s bundle **replaces** `flyway.conf` on apply -- since its
   `detect` rule only matches when a project already has one (with real,
   per-app DB settings), review the plan output's action (`update` vs
