@@ -10,16 +10,7 @@ import (
 
 // Templates is every CI/CD template bundle this tool can add to a project.
 type Templates struct {
-	// RemoteSource is the centralized pipeline-templates project every
-	// template's main .gitlab-ci.yml (Source == SourceRemote, the default)
-	// is fetched from.
-	RemoteSource RemoteSource `yaml:"remote_source"`
-	Templates    []Template   `yaml:"templates"`
-}
-
-type RemoteSource struct {
-	ProjectPath string `yaml:"project_path"` // e.g. "dso-templates/ci-cd-components/pipeline-templates"
-	Ref         string `yaml:"ref"`
+	Templates []Template `yaml:"templates"`
 }
 
 // Template is one selectable pipeline-UI option: a name and every file it
@@ -37,24 +28,17 @@ type Template struct {
 	DetectContentContains string   `yaml:"detect_content_contains,omitempty"`
 }
 
-const (
-	SourceRemote = "remote" // fetched from RemoteSource; this is the default when Source is empty
-	SourceLocal  = "local"  // read from this repo's own checkout
-)
-
-// FileSpec is one file the template bundle manages. Most templates have a
-// single remote-sourced file (the shared .gitlab-ci.yml); a template can
-// also bundle locally-sourced files this tool owns (e.g. settings.xml with
-// Nexus/Artifactory credentials) that have no reason to live in the shared
-// templates project.
+// FileSpec is one file the template bundle manages. SourcePath is a path
+// within this repo's own checkout (e.g. "templates/java-maven-ci.gitlab.yml"
+// or "files/maven-settings.xml") -- all template content lives here, read
+// straight off disk in the CI job's own checkout. No remote-fetch: this
+// tool briefly fetched .gitlab-ci.yml content from a separate centralized
+// GitLab project, but that added a failure mode (wrong path/permissions/ref
+// against a project this tool doesn't control) for no benefit once the
+// actual templates moved into this repo instead.
 type FileSpec struct {
-	TargetPath string `yaml:"target_path"`      // path in the destination project
-	SourcePath string `yaml:"source_path"`      // path within RemoteSource, or within this repo if Source == "local"
-	Source     string `yaml:"source,omitempty"` // "remote" (default) or "local"
-}
-
-func (f FileSpec) IsLocal() bool {
-	return f.Source == SourceLocal
+	TargetPath string `yaml:"target_path"` // path in the destination project
+	SourcePath string `yaml:"source_path"` // path in this repo
 }
 
 func LoadTemplates(path string) (*Templates, error) {

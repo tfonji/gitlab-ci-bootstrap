@@ -5,12 +5,10 @@
 # and .m2/settings.xml; picking the template adds all of them in one
 # commit/MR, there's no separate per-file choice.
 #
-# Each file's `source_path` is fetched from `remote_source` below UNLESS the
-# file sets `source: local`, in which case it's read from THIS repo instead
-# (see files/) -- for bundle files this tool owns, like settings.xml with
-# Nexus/Artifactory credentials, that have no reason to live in the shared
-# templates project. The main .gitlab-ci.yml for every template is remote;
-# its source_path already matches that project's file naming 1:1.
+# Every `source_path` is a path in THIS repo -- .gitlab-ci.yml files live
+# under templates/, other bundled files (settings.xml, .npmrc, etc.) under
+# files/. All read straight off disk in the CI job's own checkout, no
+# remote fetch from any other project.
 #
 # `detect`/`detect_content_contains` are informational only, consumed by the
 # `suggest` command to hint at a likely pick -- they never decide what
@@ -20,10 +18,6 @@
 # there's no override concept anymore -- a human always makes the final
 # call via the dropdown.
 
-remote_source:
-  project_path: "dso-templates/ci-cd-components/pipeline-templates"
-  ref: main
-
 templates:
   # --- Java: Maven ---
   - name: java-maven-ci
@@ -32,7 +26,6 @@ templates:
         source_path: templates/java-maven-ci.gitlab.yml
       - target_path: .m2/settings.xml
         source_path: files/maven-settings.xml
-        source: local
     detect: ["pom.xml"]
   - name: java-maven-ansible-ci-cd
     files:
@@ -40,28 +33,24 @@ templates:
         source_path: templates/java-maven-ansible-ci-cd.gitlab.yml
       - target_path: .m2/settings.xml
         source_path: files/maven-settings.xml
-        source: local
   - name: java-maven-ecs-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/java-maven-ecs-ci-cd.gitlab.yml
       - target_path: .m2/settings.xml
         source_path: files/maven-settings.xml
-        source: local
   - name: java-maven-openshift-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/java-maven-openshift-ci-cd.gitlab.yml
       - target_path: .m2/settings.xml
         source_path: files/maven-settings.xml
-        source: local
   - name: java-maven-openshift-helm-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/java-maven-openshift-helm-ci-cd.gitlab.yml
       - target_path: .m2/settings.xml
         source_path: files/maven-settings.xml
-        source: local
 
   # --- Java: Gradle ---
   - name: java-gradle-ci
@@ -92,7 +81,6 @@ templates:
         source_path: templates/java-lambda-ci-cd.gitlab.yml
       - target_path: .m2/settings.xml
         source_path: files/maven-settings.xml
-        source: local
 
   # --- Node ---
   - name: node-ci
@@ -101,7 +89,6 @@ templates:
         source_path: templates/node-ci.gitlab.yml
       - target_path: .npmrc
         source_path: files/npmrc
-        source: local
     detect: ["package.json"]
   - name: node-ecs-ci-cd
     files:
@@ -109,28 +96,24 @@ templates:
         source_path: templates/node-ecs-ci-cd.gitlab.yml
       - target_path: .npmrc
         source_path: files/npmrc
-        source: local
   - name: node-lambda-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/node-lambda-ci-cd.gitlab.yml
       - target_path: .npmrc
         source_path: files/npmrc
-        source: local
   - name: node-openshift-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/node-openshift-ci-cd.gitlab.yml
       - target_path: .npmrc
         source_path: files/npmrc
-        source: local
   - name: node-openshift-helm-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/node-openshift-helm-ci-cd.gitlab.yml
       - target_path: .npmrc
         source_path: files/npmrc
-        source: local
 
   # --- Python ---
   - name: python-ci
@@ -139,7 +122,6 @@ templates:
         source_path: templates/python-ci.gitlab.yml
       - target_path: pip.conf
         source_path: files/pip.conf
-        source: local
     detect: ["requirements.txt", "setup.py", "pyproject.toml"]
   - name: python-ansible-ci-cd
     files:
@@ -147,21 +129,18 @@ templates:
         source_path: templates/python-ansible-ci-cd.gitlab.yml
       - target_path: pip.conf
         source_path: files/pip.conf
-        source: local
   - name: python-lambda-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/python-lambda-ci-cd.gitlab.yml
       - target_path: pip.conf
         source_path: files/pip.conf
-        source: local
   - name: python-openshift-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/python-openshift-ci-cd.gitlab.yml
       - target_path: pip.conf
         source_path: files/pip.conf
-        source: local
 
   # --- .NET (IIS is the default target; core vs framework by .csproj content) ---
   - name: dotnet-core-iis-ci-cd
@@ -170,7 +149,6 @@ templates:
         source_path: templates/dotnet-core-iis-ci-cd.gitlab.yml
       - target_path: nuget.config
         source_path: files/nuget.config
-        source: local
     detect: ["*.csproj"]
     detect_content_contains: "Sdk="
   - name: dotnet-framework-iis-ci-cd
@@ -179,7 +157,6 @@ templates:
         source_path: templates/dotnet-framework-iis-ci-cd.gitlab.yml
       - target_path: nuget.config
         source_path: files/nuget.config
-        source: local
     detect: ["*.csproj"]
     detect_content_contains: "<TargetFrameworkVersion>"
   - name: dotnet-ansible-ci-cd
@@ -188,21 +165,18 @@ templates:
         source_path: templates/dotnet-ansible-ci-cd.gitlab.yml
       - target_path: nuget.config
         source_path: files/nuget.config
-        source: local
   - name: dotnet-core-ansible-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/dotnet-core-ansible-ci-cd.gitlab.yml
       - target_path: nuget.config
         source_path: files/nuget.config
-        source: local
   - name: dotnet-core-openshift-helm-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/dotnet-core-openshift-helm-ci-cd.gitlab.yml
       - target_path: nuget.config
         source_path: files/nuget.config
-        source: local
 
   # --- Infra-only ---
   - name: terraform-cd
@@ -234,5 +208,4 @@ templates:
         source_path: templates/flyway-cd.gitlab.yml
       - target_path: flyway.conf
         source_path: files/flyway.conf
-        source: local
     detect: ["flyway.conf"]

@@ -1,10 +1,11 @@
 // Package bootstrap implements the tool's whole job: given a project and a
 // human-picked template name, work out which of the template's files are
 // missing/stale (Plan), then commit all of them in one commit and open a
-// single MR (Apply). Each bundle file's content comes from wherever its
-// FileSpec.Source says: the centralized pipeline-templates GitLab project
-// (the default, for the main .gitlab-ci.yml) or this tool's own repo
-// checkout (for extra files this tool owns, like settings.xml).
+// single MR (Apply). Every bundle file's content is read from this tool's
+// own repo checkout (config.FileSpec.SourcePath) -- template content used
+// to be fetched from a separate centralized GitLab project, but that added
+// a failure mode (wrong path/permissions/ref against a project this tool
+// doesn't control) for no real benefit once the templates moved here.
 //
 // This is deliberately NOT a reconciler over many projects -- template
 // choice is a per-project, human decision (made via the pipeline UI's
@@ -92,7 +93,7 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 	}
 
 	for _, f := range tmpl.Files {
-		desired, err := b.readFile(ctx, f)
+		desired, err := readFile(f)
 		if err != nil {
 			return nil, err
 		}
@@ -151,7 +152,7 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 		if f.Action == "unchanged" {
 			continue
 		}
-		content, err := b.templateContentFor(ctx, plan.Template, f.TargetPath)
+		content, err := b.templateContentFor(plan.Template, f.TargetPath)
 		if err != nil {
 			return nil, err
 		}
@@ -204,37 +205,25 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	return result, nil
 }
 
-// readFile fetches one bundle file's content, from wherever FileSpec.Source
-// says it lives: the shared pipeline-templates project (the default -- the
-// main .gitlab-ci.yml, and any future remote-sourced file) or this tool's
-// own repo checkout (additional files this tool owns, e.g. settings.xml
-// with credentials that have no reason to live in the shared project).
-func (b *Bootstrapper) readFile(ctx context.Context, f config.FileSpec) (string, error) {
-	if f.IsLocal() {
-		data, err := os.ReadFile(f.SourcePath)
-		if err != nil {
-			return "", fmt.Errorf("reading local file %s: %w", f.SourcePath, err)
-		}
-		return string(data), nil
-	}
-
-	raw, _, err := b.Client.REST.RepositoryFiles.GetRawFile(b.Templates.RemoteSource.ProjectPath, f.SourcePath, &gitlab.GetRawFileOptions{
-		Ref: gitlab.Ptr(b.Templates.RemoteSource.Ref),
-	}, gitlab.WithContext(ctx))
+// readFile reads one bundle file's content from this tool's own repo
+// checkout -- always the version at whatever commit the CI job checked out,
+// versioned the same way as the rest of this tool.
+func readFile(f config.FileSpec) (string, error) {
+	data, err := os.ReadFile(f.SourcePath)
 	if err != nil {
-		return "", fmt.Errorf("fetching %s from %s: %w", f.SourcePath, b.Templates.RemoteSource.ProjectPath, err)
+		return "", fmt.Errorf("reading %s: %w", f.SourcePath, err)
 	}
-	return string(raw), nil
+	return string(data), nil
 }
 
-func (b *Bootstrapper) templateContentFor(ctx context.Context, templateName, targetPath string) (string, error) {
+func (b *Bootstrapper) templateContentFor(templateName, targetPath string) (string, error) {
 	tmpl := b.Templates.Find(templateName)
 	if tmpl == nil {
 		return "", fmt.Errorf("unknown template %q", templateName)
 	}
 	for _, f := range tmpl.Files {
 		if f.TargetPath == targetPath {
-			return b.readFile(ctx, f)
+			return readFile(f)
 		}
 	}
 	return "", fmt.Errorf("template %q has no file spec for target %q", templateName, targetPath)
