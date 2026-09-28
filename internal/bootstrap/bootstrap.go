@@ -192,12 +192,17 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 		return nil, fmt.Errorf("committing template files: %w", err)
 	}
 
-	mr, _, err := b.Client.REST.MergeRequests.CreateMergeRequest(plan.ProjectID, &gitlab.CreateMergeRequestOptions{
+	mrOpts := &gitlab.CreateMergeRequestOptions{
 		Title:              gitlab.Ptr(fmt.Sprintf("Add %s CI/CD template", plan.Template)),
 		SourceBranch:       gitlab.Ptr(plan.Branch),
 		TargetBranch:       gitlab.Ptr(plan.BaseBranch),
 		RemoveSourceBranch: gitlab.Ptr(true),
-	}, gitlab.WithContext(ctx))
+	}
+	if desc := mrDescription(b.Templates.Find(plan.Template)); desc != "" {
+		mrOpts.Description = gitlab.Ptr(desc)
+	}
+
+	mr, _, err := b.Client.REST.MergeRequests.CreateMergeRequest(plan.ProjectID, mrOpts, gitlab.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("opening merge request: %w", err)
 	}
@@ -206,6 +211,64 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	result.Description = fmt.Sprintf("opened MR !%d with %d file(s)", mr.IID, len(actions))
 	result.MRURL = mr.WebURL
 	return result, nil
+}
+
+// mrDescription renders a template's MRChecklist (if any) as a checklist
+// for the MR body -- these are CI/CD variables this tool has no value for
+// (per-project app config, per-environment secrets/hosts), so the best it
+// can do is remind whoever reviews the MR to configure them by hand.
+// Returns "" when the template has no checklist.
+func mrDescription(tmpl *config.Template) string {
+	if tmpl == nil || tmpl.MRChecklist == nil {
+		return ""
+	}
+	checklist := tmpl.MRChecklist
+	hasPerEnv := checklist.PerEnvironment != nil && len(checklist.PerEnvironment.Variables) > 0
+	if len(checklist.GroupLevel) == 0 && len(checklist.PerProject) == 0 && !hasPerEnv && len(checklist.Notes) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("This MR adds the CI/CD template files. The following still need to be " +
+		"configured manually in this project's CI/CD settings -- this tool has no way " +
+		"to know their values.\n")
+
+	if len(checklist.GroupLevel) > 0 {
+		b.WriteString("\n## Group-level CI/CD variables\n\n" +
+			"These should already exist above this project (group or instance level) -- " +
+			"confirm rather than assume:\n\n")
+		for _, v := range checklist.GroupLevel {
+			fmt.Fprintf(&b, "- [ ] `%s`\n", v)
+		}
+	}
+	if len(checklist.PerProject) > 0 {
+		b.WriteString("\n## Per-project CI/CD variables\n\n")
+		for _, v := range checklist.PerProject {
+			fmt.Fprintf(&b, "- [ ] `%s`\n", v)
+		}
+	}
+	if hasPerEnv {
+		envs := checklist.PerEnvironment.Environments
+		envList := make([]string, len(envs))
+		for i, e := range envs {
+			envList[i] = fmt.Sprintf("`%s`", e)
+		}
+		fmt.Fprintf(&b, "\n## Per-environment CI/CD variables\n\n"+
+			"Set a value for each deployment target: %s. In GitLab, set each "+
+			"variable's Environment scope (Settings > CI/CD > Variables) to match "+
+			"the target's environment name, or `*` if the same value applies "+
+			"everywhere:\n\n", strings.Join(envList, ", "))
+		for _, v := range checklist.PerEnvironment.Variables {
+			fmt.Fprintf(&b, "- [ ] `%s`\n", v)
+		}
+	}
+	if len(checklist.Notes) > 0 {
+		b.WriteString("\n## Notes\n\n")
+		for _, n := range checklist.Notes {
+			fmt.Fprintf(&b, "- %s\n", n)
+		}
+	}
+	return b.String()
 }
 
 // content resolves one bundle file's desired content, per FileSpec.Source:

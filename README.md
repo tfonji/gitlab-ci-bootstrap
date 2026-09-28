@@ -50,6 +50,21 @@ Stages: `build → suggest → plan → apply`
   file actions are re-checked against the branch's actual current state (not
   just the plan) so a retry after a partial failure won't try to re-create a
   file a previous attempt already added.
+- Some templates need CI/CD variables this tool has no value for -- a
+  variable expected to already exist above this project, an app-specific
+  build target, a per-environment deploy host/credential. When a
+  template's `configs/templates.yaml` entry sets `mr_checklist`, `apply`
+  writes those into the opened MR's description as a checklist, in three
+  parts: `group_level` (should already exist at group/instance level --
+  confirm, don't assume), `per_project` (one value for the whole app), and
+  `per_environment` (an `environments:` list naming each deployment target
+  by tier, e.g. `staging-dr`, plus the `variables:` that need a value per
+  target -- set via GitLab's per-variable Environment scope, or `*` for
+  the same value everywhere). Plus any free-text `notes` for anything that
+  doesn't fit a plain variable name (a naming constraint between two
+  variables, a caveat about the shared template's own environment setup).
+  See `dotnet-core-iis-ci-cd`/`dotnet-framework-iis-ci-cd` for a worked
+  example.
 
 ## Configuration
 
@@ -61,7 +76,9 @@ Stages: `build → suggest → plan → apply`
   `source: local`, `source_path` becomes the `include:` stub's `file:`
   value (see above) rather than being fetched. Only
   Maven/Node/Python/.NET/Flyway templates currently bundle a local extra
-  file alongside the generated `.gitlab-ci.yml`.
+  file alongside the generated `.gitlab-ci.yml`. A template can also set
+  `mr_checklist` (`group_level`, `per_project`, `per_environment`, `notes`)
+  -- see "How it works" above.
 - [files/](files/) -- content for the locally-sourced bundle files, versioned
   and reviewed like code, same as the rest of this repo. All placeholders
   right now (see Known gaps):
@@ -73,6 +90,7 @@ Stages: `build → suggest → plan → apply`
   | `nuget.config` → `nuget.config` | all 5 .NET templates | Yes, auto-discovered walking up from cwd |
   | `pip.conf` → `pip.conf` | all 4 Python templates | No -- pipeline needs `PIP_CONFIG_FILE=$CI_PROJECT_DIR/pip.conf`; pip.conf also can't expand `${VAR}` for credentials, unlike the others |
   | `flyway.conf` → `flyway.conf` | `flyway-cd` only | No -- pipeline needs `flyway -configFiles=$CI_PROJECT_DIR/flyway.conf`; holds per-app DB `url`/`user` only, password comes from the `FLYWAY_PASSWORD` CI variable Flyway reads natively |
+  | `bumpversion.cfg` → `.bumpversion.cfg` | `dotnet-framework-iis-ci-cd` only | No -- read directly by the `bumpversion` CLI from the repo root; its `<path to .csproj file>` placeholder is per-app (not a generic TODO) and is called out in the MR's `mr_checklist` notes instead of the table above |
 
   **Gradle (`gradle.properties`), Ansible (`ansible.cfg`), Ant/Ivy
   (`ivysettings.xml`), and Terraform (remote state backend / private module
@@ -106,8 +124,13 @@ export GITLAB_TOKEN=...
 
 ## Known gaps
 
-- Every file under `files/` has `TODO` placeholders (mirror URLs,
-  credentials) -- fill in real values before relying on this.
+- Every file under `files/` still has `TODO` placeholders (mirror URLs,
+  credentials) except `nuget.config`, which has the real Artifactory NuGet
+  feed -- fill in real values for the rest before relying on this.
+  `bumpversion.cfg` is a separate case: its `<path to .csproj file>`
+  placeholder is inherently per-app, not a generic secret, so it can't be
+  filled in here -- the MR's checklist reminds the reviewer to fill it in
+  per project instead.
 - **Several of these files only take effect if the *remote* pipeline
   template's script actually references them** -- `.npmrc` and
   `nuget.config` are auto-discovered by npm/NuGet with no extra step, but

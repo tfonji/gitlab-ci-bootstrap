@@ -174,6 +174,39 @@ templates:
         source: local
     detect: ["*.csproj"]
     detect_content_contains: "Sdk="
+    # No .bumpversion.cfg here -- this template's bumpVersion() does a raw
+    # sed on the .csproj's <version> tag directly, no bumpversion tool.
+    # The .csproj still needs a custom <ApplicationName> tag (same as
+    # dotnet-framework-iis-ci-cd) plus a lowercase <version> tag (NOT
+    # <Version> like the Framework template uses).
+    mr_checklist:
+      group_level:
+      - ARTIFACTORY_USER
+      - ARTIFACTORY_PASSWORD
+      - ARTIFACTORY_NUGET_DEV_REPO
+      - ARTIFACTORY_NUGET_PROD_REPO
+      - CONTAINER_FACTORY_IMAGE_TAGS
+      per_project:
+      - BUILD_TARGET
+      - WEB_PROJECT
+      - BuildConfiguration
+      - BuildPlatform
+      - ARTIFACT_STAGING
+      - ARTIFACT_NAME
+      per_environment:
+        environments: [development, testing, staging, staging-dr, performance, production, production-dr]
+        variables:
+        - TARGET_HOST
+        - WINRM_USER
+        - WINRM_PASSWORD
+        - IIS_SITE
+        - IIS_APPPOOL
+        - DEPLOY_PATH
+        - BACKUP_ROOT
+      notes:
+      - "`ARTIFACT_NAME` must exactly match the `<ApplicationName>` tag in the .csproj -- `package:download` names the file after `<ApplicationName>`, and the IIS deploy jobs look for `ARTIFACT_NAME` when finding it locally. A mismatch means deploy can't find the artifact."
+      - "`CONTAINER_FACTORY_IMAGE_TAGS` is referenced by `dotnetPreRelease()`'s image-tag lookup but never defined anywhere in this template -- confirm it actually exists at group level rather than assuming, since (unlike the Artifactory variables) it isn't something we've seen defined elsewhere."
+      - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), an unintentional typo rather than a deliberate distinction. Worth a fix in the shared `dso-templates/ci-cd-components/pipeline-templates` project rather than working around it here."
   - name: dotnet-framework-iis-ci-cd
     files:
       - target_path: .gitlab-ci.yml
@@ -181,8 +214,38 @@ templates:
       - target_path: nuget.config
         source_path: files/nuget.config
         source: local
+      - target_path: .bumpversion.cfg
+        source_path: files/bumpversion.cfg
+        source: local
     detect: ["*.csproj"]
     detect_content_contains: "<TargetFrameworkVersion>"
+    mr_checklist:
+      group_level:
+      - ARTIFACTORY_USER
+      - ARTIFACTORY_PASSWORD
+      - ARTIFACTORY_NUGET_DEV_REPO
+      - ARTIFACTORY_NUGET_PROD_REPO
+      per_project:
+      - SolutionName
+      - BuildConfiguration
+      - BuildPlatform
+      - ARTIFACT_PUBLISH_PATH
+      - GITLAB_PUBLISH
+      - IS_MSDEPLOY
+      per_environment:
+        environments: [development, testing, staging, staging-dr, performance, production, production-dr]
+        variables:
+        - TARGET_HOST
+        - WINRM_USER
+        - WINRM_PASSWORD
+        - IIS_SITE
+        - IIS_APPPOOL
+        - DEPLOY_PATH
+        - PACKAGE_FOLDER
+        - BACKUP_ROOT
+      notes:
+      - "Fill in the `<path to .csproj file>` placeholder in `.bumpversion.cfg` with this app's real .csproj path before merging, or `pre:config`/`bump:version` will fail."
+      - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), an unintentional typo rather than a deliberate distinction. Worth a fix in the shared `dso-templates/ci-cd-components/pipeline-templates` project rather than working around it here."
   - name: dotnet-ansible-ci-cd
     files:
       - target_path: .gitlab-ci.yml
