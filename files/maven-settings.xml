@@ -1,0 +1,19 @@
+<!-- PLACEHOLDER: real Nexus/Artifactory mirror + server credentials go here.
+     Maven expands ${env.VAR} from the job's environment, so credentials
+     should come from masked/protected CI/CD variables, never literals here. -->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <mirrors>
+    <mirror>
+      <id>TODO</id>
+      <url>TODO</url>
+      <mirrorOf>*</mirrorOf>
+    </mirror>
+  </mirrors>
+  <servers>
+    <server>
+      <id>TODO</id>
+      <username>${env.NEXUS_USER}</username>
+      <password>${env.NEXUS_PASSWORD}</password>
+    </server>
+  </servers>
+</settings>

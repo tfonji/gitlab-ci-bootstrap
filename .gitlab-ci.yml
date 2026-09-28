@@ -1,0 +1,86 @@
+stages:
+  - build
+  - suggest
+  - plan
+  - apply
+
+variables:
+  PROJECT_ID:
+    description: "Target project: numeric ID or path_with_namespace."
+    value: ""
+  TEMPLATE_NAME:
+    description: "CI/CD template to add. Run the 'suggest' job first if unsure -- check its log for a hint before picking here."
+    value: "java-maven-ci"
+    options:
+      - "java-maven-ci"
+      - "java-maven-ansible-ci-cd"
+      - "java-maven-ecs-ci-cd"
+      - "java-maven-openshift-ci-cd"
+      - "java-maven-openshift-helm-ci-cd"
+      - "java-gradle-ci"
+      - "java-gradle-openshift-ci-cd"
+      - "java-gradle-openshift-helm-ci-cd"
+      - "java-ant-tomcat-ci-cd"
+      - "java-lambda-ci-cd"
+      - "node-ci"
+      - "node-ecs-ci-cd"
+      - "node-lambda-ci-cd"
+      - "node-openshift-ci-cd"
+      - "node-openshift-helm-ci-cd"
+      - "python-ci"
+      - "python-ansible-ci-cd"
+      - "python-lambda-ci-cd"
+      - "python-openshift-ci-cd"
+      - "dotnet-core-iis-ci-cd"
+      - "dotnet-framework-iis-ci-cd"
+      - "dotnet-ansible-ci-cd"
+      - "dotnet-core-ansible-ci-cd"
+      - "dotnet-core-openshift-helm-ci-cd"
+      - "terraform-cd"
+      - "terraform-cli-cd"
+      - "terraform-kafka-cd"
+      - "ansible-cd"
+      - "flyway-cd"
+  TEMPLATES_FILE:
+    value: "configs/templates.yaml"
+
+default:
+  image: golang:1.24
+
+build:
+  stage: build
+  script:
+    - go build -o bin/gitlab-ci-bootstrap ./cmd/gitlab-ci-bootstrap
+  artifacts:
+    paths: [bin/]
+    expire_in: 1 day
+
+# Informational only -- prints a best-guess template to the job log so
+# whoever runs this pipeline can sanity-check (or correct) their
+# TEMPLATE_NAME pick before re-running plan/apply. Never gates anything.
+suggest:
+  stage: suggest
+  needs: ["build"]
+  script:
+    - ./bin/gitlab-ci-bootstrap suggest --project="$PROJECT_ID" --templates="$TEMPLATES_FILE"
+  allow_failure: true
+
+plan:
+  stage: plan
+  needs: ["build"]
+  script:
+    - ./bin/gitlab-ci-bootstrap plan --project="$PROJECT_ID" --template="$TEMPLATE_NAME" --templates="$TEMPLATES_FILE" --out=plan.json
+  artifacts:
+    paths: [plan.json]
+    expire_in: 1 week
+
+apply:
+  stage: apply
+  when: manual
+  needs: ["build", "plan"]
+  script:
+    - ./bin/gitlab-ci-bootstrap apply --plan=plan.json --templates="$TEMPLATES_FILE" --out=result.json
+  artifacts:
+    when: always
+    paths: [result.json]
+    expire_in: 1 month

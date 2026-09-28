@@ -1,0 +1,7 @@
+# PLACEHOLDER: real private npm registry URL + auth token go here.
+# npm expands ${VAR} from the job's environment, so the token should come
+# from a masked/protected CI/CD variable, never a literal here.
+# npm reads .npmrc from the project root automatically -- no extra flag
+# needed in the pipeline script for this one.
+registry=https://TODO/
+//TODO/:_authToken=${NPM_TOKEN}
