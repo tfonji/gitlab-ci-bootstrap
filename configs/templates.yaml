@@ -87,6 +87,11 @@ templates:
         extra_variables:
         - name: GITLAB_PUBLISH
           value: ""
+          description: 'Please select true if publishing to gitlab '
+          options:
+          - "true"
+          - "false"
+          - ""
         - name: DEPLOY_VARIABLE
           value: development
           description: "Build/Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
@@ -105,7 +110,7 @@ templates:
           - "Yes"
           - "No"
       - target_path: .bumpversion.cfg
-        source_path: files/bumpversion-ant-tomcat.cfg
+        source_path: files/bumpversion-ant-properties.cfg
         source: local
     detect: ["build.xml"]
     mr_checklist:
@@ -128,6 +133,59 @@ templates:
       - "`SERVICE_NAME`, `DEPLOY_DIR`, and `BACKUP_ROOT` already have defaults in the shared template (`Tomcat9`, `D:\\apache-tomcat\\apache-tomcat-current\\webapps`, `D:\\DEV`) as pipeline-run variables, not CI/CD Settings variables -- if this project needs different values, add a `variables:` block directly to this generated `.gitlab-ci.yml` to override them, rather than setting them in Settings > CI/CD > Variables."
       - "`GITLAB_PUBLISH` is set to blank (`\"\"`) in the generated `.gitlab-ci.yml`, overriding the shared template's `'true'` default -- this makes packages publish to Artifactory (`ARTIFACTORY_MAVEN_DEV_REPO`/`ARTIFACTORY_MAVEN_PROD_REPO`) instead of GitLab's own generic package registry."
       - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the full, correct list of deployment tiers (the shared template's own hint text only lists `testing | staging | production`, missing `staging-dr`/`performance`/`production-dr`) -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
+
+  - name: java-ant-fileDeploy-ci-cd
+    files:
+      - target_path: .gitlab-ci.yml
+        source_path: templates/java-ant-fileDeploy-ci-cd.gitlab.yml
+        extra_variables:
+        - name: GITLAB_PUBLISH
+          value: ""
+          description: 'Please select true if publishing to gitlab '
+          options:
+          - "true"
+          - "false"
+          - ""
+        - name: DEPLOY_VARIABLE
+          value: development
+          description: "Build/Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+          options:
+          - development
+          - testing
+          - staging
+          - staging-dr
+          - performance
+          - production
+          - production-dr
+        - name: CREATE_RELEASE
+          value: "No"
+          description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+          options:
+          - "Yes"
+          - "No"
+      - target_path: .bumpversion.cfg
+        source_path: files/bumpversion-ant-properties.cfg
+        source: local
+    mr_checklist:
+      group_level:
+      - ARTIFACTORY_USER
+      - ARTIFACTORY_PASSWORD
+      - ARTIFACTORY_MAVEN_DEV_REPO
+      - ARTIFACTORY_MAVEN_PROD_REPO
+      per_environment:
+        environments: [development, testing, staging, staging-dr, performance, production, production-dr]
+        variables:
+        - TARGET_HOST
+        - WINRM_USER
+        - WINRM_PASSWORD
+        - DEPLOY_PATH
+        - PACKAGE_FOLDER
+      notes:
+      - "`PACKAGE_FOLDER` is only actually required when `BACKUP_ENABLED` is `true` (the deploy script's own validation is conditional on it) -- still worth setting per environment so backups work if it's ever turned on."
+      - "`PROPERTY_FILE` already defaults to `app.properties` directly in the shared template (unlike `java-ant-tomcat-ci-cd`, where it had no default) -- only override it if this app's properties file lives somewhere else, and update `.bumpversion.cfg`'s `[bumpversion:file:app.properties]` path to match."
+      - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), the same unintentional typo pattern seen in the other templates in this family."
+      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the full, correct list of deployment tiers -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
+      - "`GITLAB_PUBLISH` is set to blank (`\"\"`) in the generated `.gitlab-ci.yml`, overriding the shared template's `'true'` default -- this makes packages publish to Artifactory (`ARTIFACTORY_MAVEN_DEV_REPO`/`ARTIFACTORY_MAVEN_PROD_REPO`) instead of GitLab's own generic package registry."
 
   # --- Java: Lambda ---
   - name: java-lambda-ci-cd

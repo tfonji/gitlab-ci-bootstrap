@@ -70,7 +70,7 @@ Stages: `build → suggest → plan → apply`
 
 - [configs/templates.yaml](configs/templates.yaml) -- `remote_source` names
   the centralized pipeline-templates project + ref used in the generated
-  `include:` stub; below that, all 30 templates, each with the list of
+  `include:` stub; below that, all 31 templates, each with the list of
   files it bundles. Every file has a `target_path` (where it lands in the
   destination project) and a `source_path`; unless a file sets
   `source: local`, `source_path` becomes the `include:` stub's `file:`
@@ -107,7 +107,7 @@ Stages: `build → suggest → plan → apply`
   | `pip.conf` → `pip.conf` | all 4 Python templates | No -- pipeline needs `PIP_CONFIG_FILE=$CI_PROJECT_DIR/pip.conf`; pip.conf also can't expand `${VAR}` for credentials, unlike the others |
   | `flyway.conf` → `flyway.conf` | `flyway-cd` only | No -- pipeline needs `flyway -configFiles=$CI_PROJECT_DIR/flyway.conf`; holds per-app DB `url`/`user` only, password comes from the `FLYWAY_PASSWORD` CI variable Flyway reads natively |
   | `bumpversion.cfg` → `.bumpversion.cfg` | `dotnet-framework-iis-ci-cd` only | No -- read directly by the `bumpversion` CLI from the repo root; its `<path to .csproj file>` placeholder is per-app (not a generic TODO) and is called out in the MR's `mr_checklist` notes instead of the table above |
-  | `bumpversion-ant-tomcat.cfg` → `.bumpversion.cfg` | `java-ant-tomcat-ci-cd` only | No -- read directly by the `bumpversion` CLI from the repo root; assumes the app's properties file (see `PROPERTY_FILE`) is at `app.properties` -- update the `[bumpversion:file:...]` path if it lives elsewhere, called out in the MR's `mr_checklist` notes |
+  | `bumpversion-ant-properties.cfg` → `.bumpversion.cfg` | `java-ant-tomcat-ci-cd`, `java-ant-fileDeploy-ci-cd` | No -- read directly by the `bumpversion` CLI from the repo root; assumes the app's properties file (see `PROPERTY_FILE`) is at `app.properties` -- update the `[bumpversion:file:...]` path if it lives elsewhere, called out in the MR's `mr_checklist` notes |
 
   **Gradle (`gradle.properties`), Ansible (`ansible.cfg`), Ant/Ivy
   (`ivysettings.xml`), and Terraform (remote state backend / private module

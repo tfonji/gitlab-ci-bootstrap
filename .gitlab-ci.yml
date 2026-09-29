@@ -21,6 +21,7 @@ variables:
       - "java-gradle-openshift-ci-cd"
       - "java-gradle-openshift-helm-ci-cd"
       - "java-ant-tomcat-ci-cd"
+      - "java-ant-fileDeploy-ci-cd"
       - "java-lambda-ci-cd"
       - "node-ci"
       - "node-ecs-ci-cd"
