@@ -312,6 +312,7 @@ templates:
       - BuildPlatform
       - ARTIFACT_STAGING
       - ARTIFACT_NAME
+      - version_file
       per_environment:
         environments: [development, testing, staging, staging-dr, performance, production, production-dr]
         variables:
@@ -324,6 +325,7 @@ templates:
         - BACKUP_ROOT
       notes:
       - "`ARTIFACT_NAME` must exactly match the `<ApplicationName>` tag in the .csproj -- `package:download` names the file after `<ApplicationName>`, and the IIS deploy jobs look for `ARTIFACT_NAME` when finding it locally. A mismatch means deploy can't find the artifact."
+      - "`version_file` defaults to a stale example path (`ReferralEngine.API/ReferralEngine.API.csproj`) in the shared template, not blank -- `dotnetPreRelease()` only falls back to auto-discovering the `.csproj` file when `version_file` is empty, so leaving the default as-is points the build at a `.csproj` that doesn't exist in this project. Set it to this app's actual `.csproj` path (or blank, to use auto-discovery)."
       - "`CONTAINER_FACTORY_IMAGE_TAGS` is referenced by `dotnetPreRelease()`'s image-tag lookup but never defined anywhere in this template -- confirm it actually exists at group level rather than assuming, since (unlike the Artifactory variables) it isn't something we've seen defined elsewhere."
       - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), an unintentional typo rather than a deliberate distinction. Worth a fix in the shared `dso-templates/ci-cd-components/pipeline-templates` project rather than working around it here."
       - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the complete, correct list of deployment tiers this template's deploy jobs actually use -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
@@ -363,6 +365,7 @@ templates:
       - ARTIFACTORY_PASSWORD
       - ARTIFACTORY_NUGET_DEV_REPO
       - ARTIFACTORY_NUGET_PROD_REPO
+      - VSTEST_PATH
       per_project:
       - SolutionName
       - BuildConfiguration
@@ -370,6 +373,7 @@ templates:
       - ARTIFACT_PUBLISH_PATH
       - GITLAB_PUBLISH
       - IS_MSDEPLOY
+      - TestAssemblyFilter
       per_environment:
         environments: [development, testing, staging, staging-dr, performance, production, production-dr]
         variables:
@@ -382,6 +386,7 @@ templates:
         - PACKAGE_FOLDER
         - BACKUP_ROOT
       notes:
+      - "`package:test`'s script reads `TestAssemblyFilter` and `VSTEST_PATH`, neither of which the shared template defines anywhere -- without them `Get-ChildItem -Filter $env:TestAssemblyFilter` matches nothing and the `vstest.console.exe` invocation has nothing to run, so the job silently produces no test results (it won't fail the pipeline itself since `package:test` is `allow_failure: true`). `TestAssemblyFilter` is per-app (e.g. `*.Tests.dll`); `VSTEST_PATH` looks like a fixed path on the shared Windows runner pool, so confirm it already exists at group level rather than assuming -- we don't have independent confirmation of that the way we do for `ARTIFACTORY_URL` elsewhere."
       - "Fill in the `<path to .csproj file>` placeholder in `.bumpversion.cfg` with this app's real .csproj path before merging, or `pre:config`/`bump:version` will fail."
       - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), an unintentional typo rather than a deliberate distinction. Worth a fix in the shared `dso-templates/ci-cd-components/pipeline-templates` project rather than working around it here."
       - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the complete, correct list of deployment tiers this template's deploy jobs actually use -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
