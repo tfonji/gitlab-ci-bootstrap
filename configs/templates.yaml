@@ -87,6 +87,23 @@ templates:
         extra_variables:
         - name: GITLAB_PUBLISH
           value: ""
+        - name: DEPLOY_VARIABLE
+          value: development
+          description: "Build/Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+          options:
+          - development
+          - testing
+          - staging
+          - staging-dr
+          - performance
+          - production
+          - production-dr
+        - name: CREATE_RELEASE
+          value: "No"
+          description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+          options:
+          - "Yes"
+          - "No"
       - target_path: .bumpversion.cfg
         source_path: files/bumpversion-ant-tomcat.cfg
         source: local
@@ -110,6 +127,7 @@ templates:
       - "The `.bumpversion.cfg`'s `[bumpversion:file:app.properties]` section assumes the properties file is at `app.properties` in the repo root -- if `PROPERTY_FILE` points elsewhere, update this section's file path to match, or `bump:version` will silently bump the wrong file (or none)."
       - "`SERVICE_NAME`, `DEPLOY_DIR`, and `BACKUP_ROOT` already have defaults in the shared template (`Tomcat9`, `D:\\apache-tomcat\\apache-tomcat-current\\webapps`, `D:\\DEV`) as pipeline-run variables, not CI/CD Settings variables -- if this project needs different values, add a `variables:` block directly to this generated `.gitlab-ci.yml` to override them, rather than setting them in Settings > CI/CD > Variables."
       - "`GITLAB_PUBLISH` is set to blank (`\"\"`) in the generated `.gitlab-ci.yml`, overriding the shared template's `'true'` default -- this makes packages publish to Artifactory (`ARTIFACTORY_MAVEN_DEV_REPO`/`ARTIFACTORY_MAVEN_PROD_REPO`) instead of GitLab's own generic package registry."
+      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the full, correct list of deployment tiers (the shared template's own hint text only lists `testing | staging | production`, missing `staging-dr`/`performance`/`production-dr`) -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
 
   # --- Java: Lambda ---
   - name: java-lambda-ci-cd
@@ -194,6 +212,24 @@ templates:
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/dotnet-core-iis-ci-cd.gitlab.yml
+        extra_variables:
+        - name: DEPLOY_VARIABLE
+          value: development
+          description: "Build/Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+          options:
+          - development
+          - testing
+          - staging
+          - staging-dr
+          - performance
+          - production
+          - production-dr
+        - name: CREATE_RELEASE
+          value: "No"
+          description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+          options:
+          - "Yes"
+          - "No"
       - target_path: nuget.config
         source_path: files/nuget.config
         source: local
@@ -232,10 +268,29 @@ templates:
       - "`ARTIFACT_NAME` must exactly match the `<ApplicationName>` tag in the .csproj -- `package:download` names the file after `<ApplicationName>`, and the IIS deploy jobs look for `ARTIFACT_NAME` when finding it locally. A mismatch means deploy can't find the artifact."
       - "`CONTAINER_FACTORY_IMAGE_TAGS` is referenced by `dotnetPreRelease()`'s image-tag lookup but never defined anywhere in this template -- confirm it actually exists at group level rather than assuming, since (unlike the Artifactory variables) it isn't something we've seen defined elsewhere."
       - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), an unintentional typo rather than a deliberate distinction. Worth a fix in the shared `dso-templates/ci-cd-components/pipeline-templates` project rather than working around it here."
+      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the complete, correct list of deployment tiers this template's deploy jobs actually use -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
   - name: dotnet-framework-iis-ci-cd
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/dotnet-framework-iis-ci-cd.gitlab.yml
+        extra_variables:
+        - name: DEPLOY_VARIABLE
+          value: development
+          description: "Build/Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+          options:
+          - development
+          - testing
+          - staging
+          - staging-dr
+          - performance
+          - production
+          - production-dr
+        - name: CREATE_RELEASE
+          value: "No"
+          description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+          options:
+          - "Yes"
+          - "No"
       - target_path: nuget.config
         source_path: files/nuget.config
         source: local
@@ -271,6 +326,7 @@ templates:
       notes:
       - "Fill in the `<path to .csproj file>` placeholder in `.bumpversion.cfg` with this app's real .csproj path before merging, or `pre:config`/`bump:version` will fail."
       - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), an unintentional typo rather than a deliberate distinction. Worth a fix in the shared `dso-templates/ci-cd-components/pipeline-templates` project rather than working around it here."
+      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the complete, correct list of deployment tiers this template's deploy jobs actually use -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
   - name: dotnet-ansible-ci-cd
     files:
       - target_path: .gitlab-ci.yml
@@ -301,6 +357,23 @@ templates:
         extra_variables:
         - name: DEVENV_PATH
           value: ""
+        - name: DEPLOY_VARIABLE
+          value: development
+          description: "Build/Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+          options:
+          - development
+          - testing
+          - staging
+          - staging-dr
+          - performance
+          - production
+          - production-dr
+        - name: CREATE_RELEASE
+          value: "No"
+          description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+          options:
+          - "Yes"
+          - "No"
     detect: ["*.dtproj"]
     mr_checklist:
       group_level:
@@ -341,6 +414,7 @@ templates:
       - "This template authenticates to Artifactory with a Bearer token (`ARTIFACTORY_TOKEN`) rather than the `ARTIFACTORY_USER`/`ARTIFACTORY_PASSWORD` basic-auth pattern the other templates use."
       - "`UAT_*` variables back the `staging` deployment tier (`ssis:deploy:staging`) -- this project's naming convention for that environment, not a mismatch."
       - "`DEVENV_PATH` is set to blank (`\"\"`) in the generated `.gitlab-ci.yml`, overriding the shared template's hardcoded Visual Studio path default -- set it to this project's actual `devenv.com` path on the Windows runner it builds on."
+      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with a corrected tier list -- the shared template's own hint text lists a `staging-pp` value that no deploy job actually checks for (the real job is `ssis:deploy:performance`, checking `\"performance\"`), so anyone typing `staging-pp` per the original hint would trigger no deployment at all."
 
   # --- Infra-only ---
   - name: terraform-cd

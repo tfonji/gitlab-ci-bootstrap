@@ -109,14 +109,30 @@ type FileSpec struct {
 	ExtraVariables []ExtraVariable `yaml:"extra_variables,omitempty"`
 }
 
-// ExtraVariable is one name/value pair rendered into an include stub's
-// `variables:` override block. Value is rendered quoted, so "" is a valid
-// (and common) override -- it makes a bash `[ "$VAR" != "true" ]` check in
-// the shared template's script take the false branch instead of whatever
+// ExtraVariable is one variable rendered into an include stub's `variables:`
+// override block. With only Name/Value set, it renders as a plain scalar
+// (`NAME: "value"`) -- fine for a flag or path the shared template's script
+// just reads, like GITLAB_PUBLISH or DEVENV_PATH. Value alone still matters
+// even when blank: "" is a valid (and common) override -- it makes a bash
+// `[ "$VAR" != "true" ]` check take the false branch instead of whatever
 // that variable's own default in the shared template evaluates to.
+//
+// Some shared-template variables (DEPLOY_VARIABLE, CREATE_RELEASE) are
+// instead declared there in GitLab's extended form -- value + description,
+// sometimes + options -- specifically so GitLab prompts for them as a
+// described/dropdown field on the "Run pipeline" screen. GitLab merges
+// global `variables:` between an included file and the including project's
+// own file key-by-key: the project's own definition fully REPLACES that
+// key, not a deep merge of value/description/options. So overriding one of
+// these with a bare scalar would silently drop its description and
+// dropdown from the trigger form. Setting Description and/or Options here
+// reproduces (or corrects -- e.g. a stale options list) that same extended
+// form instead of flattening it.
 type ExtraVariable struct {
-	Name  string `yaml:"name"`
-	Value string `yaml:"value"`
+	Name        string   `yaml:"name"`
+	Value       string   `yaml:"value"`
+	Description string   `yaml:"description,omitempty"`
+	Options     []string `yaml:"options,omitempty"`
 }
 
 func (f FileSpec) IsLocal() bool {

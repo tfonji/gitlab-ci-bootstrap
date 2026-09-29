@@ -298,14 +298,31 @@ func (b *Bootstrapper) content(f config.FileSpec) (string, error) {
 // the target project, so template updates there apply automatically
 // without this tool needing to re-run. When extra is non-empty, a
 // `variables:` block is appended after the include, overriding whatever
-// default the shared template sets for each of those names.
+// default the shared template sets for each of those names. A variable
+// with only a Value renders as a plain scalar; one with a Description
+// and/or Options renders in GitLab's extended form instead, so overriding
+// a "Run pipeline"-prompted variable (e.g. DEPLOY_VARIABLE) keeps -- or
+// corrects -- its description/dropdown rather than flattening it away.
 func includeStub(remote config.RemoteSource, file string, extra []config.ExtraVariable) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "include:\n  - project: %s\n    ref: %s\n    file: '%s'\n", remote.ProjectPath, remote.Ref, file)
 	if len(extra) > 0 {
 		b.WriteString("\nvariables:\n")
 		for _, v := range extra {
-			fmt.Fprintf(&b, "  %s: %q\n", v.Name, v.Value)
+			if v.Description == "" && len(v.Options) == 0 {
+				fmt.Fprintf(&b, "  %s: %q\n", v.Name, v.Value)
+				continue
+			}
+			fmt.Fprintf(&b, "  %s:\n    value: %q\n", v.Name, v.Value)
+			if v.Description != "" {
+				fmt.Fprintf(&b, "    description: %q\n", v.Description)
+			}
+			if len(v.Options) > 0 {
+				b.WriteString("    options:\n")
+				for _, o := range v.Options {
+					fmt.Fprintf(&b, "      - %q\n", o)
+				}
+			}
 		}
 	}
 	return b.String()

@@ -77,13 +77,23 @@ Stages: `build → suggest → plan → apply`
   value (see above) rather than being fetched. Only
   Maven/Node/Python/.NET/Java-Ant/Flyway templates currently bundle a local
   extra file alongside the generated `.gitlab-ci.yml`. An `include`-sourced
-  file can also set `extra_variables` (a list of `name`/`value` pairs) --
-  these get written into a top-level `variables:` block appended after the
-  `include:` in the generated file, overriding whatever default the shared
-  template sets for that name (e.g. `java-ant-tomcat-ci-cd` sets
-  `GITLAB_PUBLISH: ""` to override the shared template's `'true'` default
-  and route package publishing to Artifactory instead of GitLab's package
-  registry). A template can also set `mr_checklist` (`group_level`,
+  file can also set `extra_variables` -- a list of `name`/`value` pairs
+  written into a top-level `variables:` block appended after the `include:`
+  in the generated file, overriding whatever default the shared template
+  sets for that name. `name`/`value` alone renders as a plain scalar
+  (`NAME: "value"`) -- fine for a flag or path the shared template's script
+  just reads (e.g. `java-ant-tomcat-ci-cd` sets `GITLAB_PUBLISH: ""` to
+  route package publishing to Artifactory instead of GitLab's package
+  registry; `ssis-ci-cd` sets `DEVENV_PATH: ""` for the same reason).
+  Some shared-template variables (`DEPLOY_VARIABLE`, `CREATE_RELEASE`) are
+  instead declared there in GitLab's extended form -- `value` +
+  `description`, sometimes + `options` -- so GitLab prompts for them as a
+  described/dropdown field on the "Run pipeline" screen; overriding one
+  with a bare scalar would silently drop that description/dropdown, since
+  GitLab replaces a variable key wholesale rather than deep-merging it. Add
+  `description` and/or `options` alongside `value` to reproduce (or correct
+  -- e.g. `ssis-ci-cd`'s stale `staging-pp` option) that same extended form
+  instead. A template can also set `mr_checklist` (`group_level`,
   `per_project`, `per_environment`, `notes`) -- see "How it works" above.
 - [files/](files/) -- content for the locally-sourced bundle files, versioned
   and reviewed like code, same as the rest of this repo. All placeholders
