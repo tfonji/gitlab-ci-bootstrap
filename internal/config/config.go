@@ -100,6 +100,23 @@ type FileSpec struct {
 	TargetPath string `yaml:"target_path"`      // path in the destination project
 	SourcePath string `yaml:"source_path"`      // the `file:` value if Source == "include"; a path in this repo if "local"
 	Source     string `yaml:"source,omitempty"` // "include" (default) or "local"
+
+	// ExtraVariables are written into a top-level `variables:` block appended
+	// to this file's generated `include:` stub, overriding a default the
+	// shared template sets in its own `variables:` block (e.g. GITLAB_PUBLISH)
+	// for every project that adds this template. Only meaningful when
+	// Source == SourceInclude; ignored for a local file.
+	ExtraVariables []ExtraVariable `yaml:"extra_variables,omitempty"`
+}
+
+// ExtraVariable is one name/value pair rendered into an include stub's
+// `variables:` override block. Value is rendered quoted, so "" is a valid
+// (and common) override -- it makes a bash `[ "$VAR" != "true" ]` check in
+// the shared template's script take the false branch instead of whatever
+// that variable's own default in the shared template evaluates to.
+type ExtraVariable struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
 }
 
 func (f FileSpec) IsLocal() bool {

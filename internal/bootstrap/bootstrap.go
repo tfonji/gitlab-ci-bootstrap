@@ -283,7 +283,7 @@ func (b *Bootstrapper) content(f config.FileSpec) (string, error) {
 		}
 		return string(data), nil
 	}
-	return includeStub(b.Templates.RemoteSource, f.SourcePath), nil
+	return includeStub(b.Templates.RemoteSource, f.SourcePath, f.ExtraVariables), nil
 }
 
 // includeStub generates a GitLab CI file that does nothing but include the
@@ -296,9 +296,19 @@ func (b *Bootstrapper) content(f config.FileSpec) (string, error) {
 //
 // This is deliberate: the shared project's content is never copied into
 // the target project, so template updates there apply automatically
-// without this tool needing to re-run.
-func includeStub(remote config.RemoteSource, file string) string {
-	return fmt.Sprintf("include:\n  - project: %s\n    ref: %s\n    file: '%s'\n", remote.ProjectPath, remote.Ref, file)
+// without this tool needing to re-run. When extra is non-empty, a
+// `variables:` block is appended after the include, overriding whatever
+// default the shared template sets for each of those names.
+func includeStub(remote config.RemoteSource, file string, extra []config.ExtraVariable) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "include:\n  - project: %s\n    ref: %s\n    file: '%s'\n", remote.ProjectPath, remote.Ref, file)
+	if len(extra) > 0 {
+		b.WriteString("\nvariables:\n")
+		for _, v := range extra {
+			fmt.Fprintf(&b, "  %s: %q\n", v.Name, v.Value)
+		}
+	}
+	return b.String()
 }
 
 func (b *Bootstrapper) templateContentFor(templateName, targetPath string) (string, error) {

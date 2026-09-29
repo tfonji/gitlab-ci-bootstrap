@@ -75,10 +75,16 @@ Stages: `build → suggest → plan → apply`
   destination project) and a `source_path`; unless a file sets
   `source: local`, `source_path` becomes the `include:` stub's `file:`
   value (see above) rather than being fetched. Only
-  Maven/Node/Python/.NET/Flyway templates currently bundle a local extra
-  file alongside the generated `.gitlab-ci.yml`. A template can also set
-  `mr_checklist` (`group_level`, `per_project`, `per_environment`, `notes`)
-  -- see "How it works" above.
+  Maven/Node/Python/.NET/Java-Ant/Flyway templates currently bundle a local
+  extra file alongside the generated `.gitlab-ci.yml`. An `include`-sourced
+  file can also set `extra_variables` (a list of `name`/`value` pairs) --
+  these get written into a top-level `variables:` block appended after the
+  `include:` in the generated file, overriding whatever default the shared
+  template sets for that name (e.g. `java-ant-tomcat-ci-cd` sets
+  `GITLAB_PUBLISH: ""` to override the shared template's `'true'` default
+  and route package publishing to Artifactory instead of GitLab's package
+  registry). A template can also set `mr_checklist` (`group_level`,
+  `per_project`, `per_environment`, `notes`) -- see "How it works" above.
 - [files/](files/) -- content for the locally-sourced bundle files, versioned
   and reviewed like code, same as the rest of this repo. All placeholders
   right now (see Known gaps):
@@ -91,6 +97,7 @@ Stages: `build → suggest → plan → apply`
   | `pip.conf` → `pip.conf` | all 4 Python templates | No -- pipeline needs `PIP_CONFIG_FILE=$CI_PROJECT_DIR/pip.conf`; pip.conf also can't expand `${VAR}` for credentials, unlike the others |
   | `flyway.conf` → `flyway.conf` | `flyway-cd` only | No -- pipeline needs `flyway -configFiles=$CI_PROJECT_DIR/flyway.conf`; holds per-app DB `url`/`user` only, password comes from the `FLYWAY_PASSWORD` CI variable Flyway reads natively |
   | `bumpversion.cfg` → `.bumpversion.cfg` | `dotnet-framework-iis-ci-cd` only | No -- read directly by the `bumpversion` CLI from the repo root; its `<path to .csproj file>` placeholder is per-app (not a generic TODO) and is called out in the MR's `mr_checklist` notes instead of the table above |
+  | `bumpversion-ant-tomcat.cfg` → `.bumpversion.cfg` | `java-ant-tomcat-ci-cd` only | No -- read directly by the `bumpversion` CLI from the repo root; assumes the app's properties file (see `PROPERTY_FILE`) is at `app.properties` -- update the `[bumpversion:file:...]` path if it lives elsewhere, called out in the MR's `mr_checklist` notes |
 
   **Gradle (`gradle.properties`), Ansible (`ansible.cfg`), Ant/Ivy
   (`ivysettings.xml`), and Terraform (remote state backend / private module
