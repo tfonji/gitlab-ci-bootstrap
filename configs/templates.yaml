@@ -293,6 +293,55 @@ templates:
         source_path: files/nuget.config
         source: local
 
+  # --- SSIS ---
+  - name: ssis-ci-cd
+    files:
+      - target_path: .gitlab-ci.yml
+        source_path: templates/ssis-ci-cd.gitlab.yml
+        extra_variables:
+        - name: DEVENV_PATH
+          value: ""
+    detect: ["*.dtproj"]
+    mr_checklist:
+      group_level:
+      - ARTIFACTORY_TOKEN
+      - DEV_ARTIFACTORY_REPOSITORY
+      - PROD_ARTIFACTORY_REPOSITORY
+      per_project:
+      - DEV_TARGET_HOST
+      - DEV_WINRM_USER
+      - DEV_WINRM_PASSWORD
+      - DEV_SSIS_FOLDER_NAME
+      - QA_TARGET_HOST
+      - QA_WINRM_USER
+      - QA_WINRM_PASSWORD
+      - QA_SSIS_FOLDER_NAME
+      - UAT_TARGET_HOST
+      - UAT_WINRM_USER
+      - UAT_WINRM_PASSWORD
+      - UAT_SSIS_FOLDER_NAME
+      - STAGEDR_TARGET_HOST
+      - STAGEDR_WINRM_USER
+      - STAGEDR_WINRM_PASSWORD
+      - STAGEDR_SSIS_FOLDER_NAME
+      - PERF_TARGET_HOST
+      - PERF_WINRM_USER
+      - PERF_WINRM_PASSWORD
+      - PERF_SSIS_FOLDER_NAME
+      - PROD_TARGET_HOST
+      - PROD_WINRM_USER
+      - PROD_WINRM_PASSWORD
+      - PROD_SSIS_FOLDER_NAME
+      - PRODDR_TARGET_HOST
+      - PRODDR_WINRM_USER
+      - PRODDR_WINRM_PASSWORD
+      - PRODDR_SSIS_FOLDER_NAME
+      notes:
+      - "`version.txt` must exist at the repo root in the format `version: X.Y.Z` -- read by `ssisPreConfigArtifacts()`/`bumpVersion()`. There's no `.bumpversion.cfg` or `bumpversion` CLI for this template; version bumping is done natively in PowerShell."
+      - "This template authenticates to Artifactory with a Bearer token (`ARTIFACTORY_TOKEN`) rather than the `ARTIFACTORY_USER`/`ARTIFACTORY_PASSWORD` basic-auth pattern the other templates use."
+      - "`UAT_*` variables back the `staging` deployment tier (`ssis:deploy:staging`) -- this project's naming convention for that environment, not a mismatch."
+      - "`DEVENV_PATH` is set to blank (`\"\"`) in the generated `.gitlab-ci.yml`, overriding the shared template's hardcoded Visual Studio path default -- set it to this project's actual `devenv.com` path on the Windows runner it builds on."
+
   # --- Infra-only ---
   - name: terraform-cd
     files:

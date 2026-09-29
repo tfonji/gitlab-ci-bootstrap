@@ -36,6 +36,7 @@ variables:
       - "dotnet-ansible-ci-cd"
       - "dotnet-core-ansible-ci-cd"
       - "dotnet-core-openshift-helm-ci-cd"
+      - "ssis-ci-cd"
       - "terraform-cd"
       - "terraform-cli-cd"
       - "terraform-kafka-cd"

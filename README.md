@@ -70,7 +70,7 @@ Stages: `build → suggest → plan → apply`
 
 - [configs/templates.yaml](configs/templates.yaml) -- `remote_source` names
   the centralized pipeline-templates project + ref used in the generated
-  `include:` stub; below that, all 29 templates, each with the list of
+  `include:` stub; below that, all 30 templates, each with the list of
   files it bundles. Every file has a `target_path` (where it lands in the
   destination project) and a `source_path`; unless a file sets
   `source: local`, `source_path` becomes the `include:` stub's `file:`
