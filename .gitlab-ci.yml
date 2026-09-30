@@ -1,8 +1,10 @@
 stages:
-  - build
-  - suggest
   - plan
   - apply
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
 
 variables:
   PROJECT_ID:
@@ -20,9 +22,7 @@ variables:
       - "java-gradle-ci"
       - "java-gradle-openshift-ci-cd"
       - "java-gradle-openshift-helm-ci-cd"
-      - "java-gradle-fileDeploy-ci-cd"
       - "java-ant-tomcat-ci-cd"
-      - "java-ant-fileDeploy-ci-cd"
       - "java-lambda-ci-cd"
       - "node-ci"
       - "node-ecs-ci-cd"
@@ -38,7 +38,6 @@ variables:
       - "dotnet-ansible-ci-cd"
       - "dotnet-core-ansible-ci-cd"
       - "dotnet-core-openshift-helm-ci-cd"
-      - "ssis-ci-cd"
       - "terraform-cd"
       - "terraform-cli-cd"
       - "terraform-kafka-cd"
@@ -47,30 +46,8 @@ variables:
   TEMPLATES_FILE:
     value: "configs/templates.yaml"
 
-default:
-  image: golang:1.24
-
-build:
-  stage: build
-  script:
-    - go build -o bin/gitlab-ci-bootstrap ./cmd/gitlab-ci-bootstrap
-  artifacts:
-    paths: [bin/]
-    expire_in: 1 day
-
-# Informational only -- prints a best-guess template to the job log so
-# whoever runs this pipeline can sanity-check (or correct) their
-# TEMPLATE_NAME pick before re-running plan/apply. Never gates anything.
-suggest:
-  stage: suggest
-  needs: ["build"]
-  script:
-    - ./bin/gitlab-ci-bootstrap suggest --project="$PROJECT_ID" --templates="$TEMPLATES_FILE"
-  allow_failure: true
-
 plan:
   stage: plan
-  needs: ["build"]
   script:
     - ./bin/gitlab-ci-bootstrap plan --project="$PROJECT_ID" --template="$TEMPLATE_NAME" --templates="$TEMPLATES_FILE" --out=plan.json
   artifacts:
@@ -80,7 +57,7 @@ plan:
 apply:
   stage: apply
   when: manual
-  needs: ["build", "plan"]
+  needs: ["plan"]
   script:
     - ./bin/gitlab-ci-bootstrap apply --plan=plan.json --templates="$TEMPLATES_FILE" --out=result.json
   artifacts:
