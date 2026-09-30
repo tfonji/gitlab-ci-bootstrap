@@ -52,7 +52,7 @@ variables:
 plan:
   stage: plan
   script:
-    - ./bin/gitlab-ci-bootstrap plan --project="$PROJECT_ID" --template="$TEMPLATE_NAME" --templates="$TEMPLATES_FILE" --out=plan.json
+    - ./bin/gitlab-ci-bootstrap-linux-amd64 plan --project="$PROJECT_ID" --template="$TEMPLATE_NAME" --templates="$TEMPLATES_FILE" --out=plan.json
   artifacts:
     paths: [plan.json]
     expire_in: 1 week
@@ -62,7 +62,7 @@ apply:
   when: manual
   needs: ["plan"]
   script:
-    - ./bin/gitlab-ci-bootstrap apply --plan=plan.json --templates="$TEMPLATES_FILE" --out=result.json
+    - ./bin/gitlab-ci-bootstrap-linux-amd64 apply --plan=plan.json --templates="$TEMPLATES_FILE" --out=result.json
   artifacts:
     when: always
     paths: [result.json]
