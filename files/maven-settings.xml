@@ -11,9 +11,9 @@
   </mirrors>
   <servers>
     <server>
-      <id>TODO</id>
-      <username>${env.NEXUS_USER}</username>
-      <password>${env.NEXUS_PASSWORD}</password>
+      <id>nexus</id>
+      <username>${env.GL_NEXUS_USERNAME}</username>
+      <password>${env.GL_NEXUS_PASSWORD}</password>
     </server>
   </servers>
 </settings>

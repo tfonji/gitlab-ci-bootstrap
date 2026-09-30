@@ -35,6 +35,13 @@ templates:
         source_path: files/maven-settings.xml
         source: local
     detect: ["pom.xml"]
+    mr_checklist:
+      per_project:
+      - NEXUS_PROJECT_REPO
+      notes:
+      - "Make sure `pom.xml` declares `<version>`, `<groupId>`, and `<artifactId>` -- `package:build`'s validation hard-fails (MAV007/MAV008/MAV014) if any is missing."
+      - "Wire up the jacoco-maven-plugin in `pom.xml` to produce `target/site/jacoco/index.html` -- `package:test` hard-fails (MAV004) without it, unless this app's packaging type is `pom` with no `.java` sources."
+      - "If this app's `pom.xml` uses a property-based version (e.g. `<version>${revision}</version>`) rather than a literal value, set `version_property` to that property name -- otherwise `bump:version`'s raw `sed` against the literal `<version>` tag won't find a match and silently fails to bump anything."
   - name: java-maven-ansible-ci-cd
     files:
       - target_path: .gitlab-ci.yml
@@ -42,6 +49,42 @@ templates:
       - target_path: .m2/settings.xml
         source_path: files/maven-settings.xml
         source: local
+    mr_checklist:
+      per_project:
+      - NEXUS_PROJECT_REPO
+      - ANSIBLE_PROJECT_SCM_URL
+      - DEV_ANS_PROJECT_NAME
+      - DEV_ANS_TEMPLATE_NAME
+      - DEV_ANS_JOB_INVENTORY
+      - DEV_ENV
+      - QA_ANS_PROJECT_NAME
+      - QA_ANS_TEMPLATE_NAME
+      - QA_ANS_JOB_INVENTORY
+      - QA_ENV
+      - UAT_ANS_PROJECT_NAME
+      - UAT_ANS_TEMPLATE_NAME
+      - UAT_ANS_JOB_INVENTORY
+      - UAT_ENV
+      - DR_ANS_PROJECT_NAME
+      - DR_ANS_TEMPLATE_NAME
+      - DR_ANS_JOB_INVENTORY
+      - DR_ENV
+      - PERF_ANS_PROJECT_NAME
+      - PERF_ANS_TEMPLATE_NAME
+      - PERF_ANS_JOB_INVENTORY
+      - PERF_ENV
+      - PROD_ANS_PROJECT_NAME
+      - PROD_ANS_TEMPLATE_NAME
+      - PROD_ANS_JOB_INVENTORY
+      - PROD_ENV
+      - PROD_DR_ANS_PROJECT_NAME
+      - PROD_DR_ANS_TEMPLATE_NAME
+      - PROD_DR_ANS_JOB_INVENTORY
+      - PROD_DR_ENV
+      notes:
+      - "Make sure `pom.xml` declares `<version>`, `<groupId>`, and `<artifactId>` -- `package:build`'s validation hard-fails (MAV007/MAV008/MAV014) if any is missing."
+      - "Wire up the jacoco-maven-plugin in `pom.xml` to produce `target/site/jacoco/index.html` -- `package:test` hard-fails (MAV004) without it, unless this app's packaging type is `pom` with no `.java` sources."
+      - "If this app's `pom.xml` uses a property-based version (e.g. `<version>${revision}</version>`) rather than a literal value, set `version_property` to that property name -- otherwise `bump:version`'s raw `sed` against the literal `<version>` tag won't find a match and silently fails to bump anything."
   - name: java-maven-ecs-ci-cd
     files:
       - target_path: .gitlab-ci.yml
@@ -78,6 +121,57 @@ templates:
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/java-gradle-openshift-helm-ci-cd.gitlab.yml
+  - name: java-gradle-fileDeploy-ci-cd
+    files:
+      - target_path: .gitlab-ci.yml
+        source_path: templates/java-gradle-fileDeploy-ci-cd.gitlab.yml
+        extra_variables:
+        - name: GITLAB_PUBLISH
+          value: ""
+          description: 'Please select true if publishing to gitlab '
+          options:
+          - "true"
+          - "false"
+          - ""
+        - name: DEPLOY_VARIABLE
+          value: development
+          description: "Build/Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+          options:
+          - development
+          - testing
+          - staging
+          - staging-dr
+          - performance
+          - production
+          - production-dr
+        - name: CREATE_RELEASE
+          value: "No"
+          description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+          options:
+          - "Yes"
+          - "No"
+    mr_checklist:
+      group_level:
+      - ARTIFACTORY_USER
+      - ARTIFACTORY_PASSWORD
+      - ARTIFACTORY_MAVEN_DEV_REPO
+      - ARTIFACTORY_MAVEN_PROD_REPO
+      per_project:
+      - IS_GRADLEW
+      per_environment:
+        environments: [development, testing, staging, staging-dr, performance, production, production-dr]
+        variables:
+        - TARGET_HOST
+        - WINRM_USER
+        - WINRM_PASSWORD
+        - DEPLOY_PATH
+        - PACKAGE_FOLDER
+      notes:
+      - "`IS_GRADLEW` has no default anywhere in the shared template, but it's the single biggest behavior switch in the pipeline -- it decides whether `package:build`/`package:publish`/the release-publish job run this app's own `./gradlew` wrapper, or fall back to the runner's system `gradle` binary plus a legacy `mvn deploy:deploy-file` publish path. Every project must set it explicitly to `true` (repo has `./gradlew` checked in) or `false`."
+      - "`is_multi_file` defaults to `'yes'` in the shared template, so `package:build` tars up `MULTI_FILE_SOURCE_DIR` (defaults to `dist`) by default -- `dist` isn't a standard Gradle output directory, so confirm/override it per app to match wherever this project's build actually stages its deployable files, or the archive job will fail or package the wrong thing."
+      - "`PUBLISH_ARTIFACTS` defaults to `'No'` in the shared template, so `package:publish` is a silent no-op (nothing gets pushed to Artifactory or GitLab's package registry) until it's explicitly set to `'Yes'` -- confirm this default is intentional per project."
+      - "`PACKAGE_FOLDER` is only actually required when `BACKUP_ENABLED` is `true` (the deploy script's own validation is conditional on it) -- still worth setting per environment so backups work if it's ever turned on."
+      - "`ARTIFACTORY_MAVEN_DEV_REPO`/`ARTIFACTORY_MAVEN_PROD_REPO` must be configured directly -- unlike every other language family in this shared template, nothing in this template's workflow rules wires them up automatically per branch."
 
   # --- Java: Ant / Tomcat ---
   - name: java-ant-tomcat-ci-cd
@@ -131,8 +225,6 @@ templates:
       - "`PROPERTY_FILE` should point at this app's properties file containing `name=`/`version=` (read by `antPreRelease()`); its `name=` value becomes `artifactId` everywhere downstream (package naming, WAR lookup, deploy) -- the same role `<ApplicationName>` plays for the .NET IIS templates."
       - "The `.bumpversion.cfg`'s `[bumpversion:file:app.properties]` section assumes the properties file is at `app.properties` in the repo root -- if `PROPERTY_FILE` points elsewhere, update this section's file path to match, or `bump:version` will silently bump the wrong file (or none)."
       - "`SERVICE_NAME`, `DEPLOY_DIR`, and `BACKUP_ROOT` already have defaults in the shared template (`Tomcat9`, `D:\\apache-tomcat\\apache-tomcat-current\\webapps`, `D:\\DEV`) as pipeline-run variables, not CI/CD Settings variables -- if this project needs different values, add a `variables:` block directly to this generated `.gitlab-ci.yml` to override them, rather than setting them in Settings > CI/CD > Variables."
-      - "`GITLAB_PUBLISH` is set to blank (`\"\"`) in the generated `.gitlab-ci.yml`, overriding the shared template's `'true'` default -- this makes packages publish to Artifactory (`ARTIFACTORY_MAVEN_DEV_REPO`/`ARTIFACTORY_MAVEN_PROD_REPO`) instead of GitLab's own generic package registry."
-      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the full, correct list of deployment tiers (the shared template's own hint text only lists `testing | staging | production`, missing `staging-dr`/`performance`/`production-dr`) -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
 
   - name: java-ant-fileDeploy-ci-cd
     files:
@@ -183,9 +275,6 @@ templates:
       notes:
       - "`PACKAGE_FOLDER` is only actually required when `BACKUP_ENABLED` is `true` (the deploy script's own validation is conditional on it) -- still worth setting per environment so backups work if it's ever turned on."
       - "`PROPERTY_FILE` already defaults to `app.properties` directly in the shared template (unlike `java-ant-tomcat-ci-cd`, where it had no default) -- only override it if this app's properties file lives somewhere else, and update `.bumpversion.cfg`'s `[bumpversion:file:app.properties]` path to match."
-      - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), the same unintentional typo pattern seen in the other templates in this family."
-      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the full, correct list of deployment tiers -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
-      - "`GITLAB_PUBLISH` is set to blank (`\"\"`) in the generated `.gitlab-ci.yml`, overriding the shared template's `'true'` default -- this makes packages publish to Artifactory (`ARTIFACTORY_MAVEN_DEV_REPO`/`ARTIFACTORY_MAVEN_PROD_REPO`) instead of GitLab's own generic package registry."
 
   # --- Java: Lambda ---
   - name: java-lambda-ci-cd
@@ -304,7 +393,6 @@ templates:
       - ARTIFACTORY_PASSWORD
       - ARTIFACTORY_NUGET_DEV_REPO
       - ARTIFACTORY_NUGET_PROD_REPO
-      - CONTAINER_FACTORY_IMAGE_TAGS
       per_project:
       - BUILD_TARGET
       - WEB_PROJECT
@@ -326,9 +414,6 @@ templates:
       notes:
       - "`ARTIFACT_NAME` must exactly match the `<ApplicationName>` tag in the .csproj -- `package:download` names the file after `<ApplicationName>`, and the IIS deploy jobs look for `ARTIFACT_NAME` when finding it locally. A mismatch means deploy can't find the artifact."
       - "`version_file` defaults to a stale example path (`ReferralEngine.API/ReferralEngine.API.csproj`) in the shared template, not blank -- `dotnetPreRelease()` only falls back to auto-discovering the `.csproj` file when `version_file` is empty, so leaving the default as-is points the build at a `.csproj` that doesn't exist in this project. Set it to this app's actual `.csproj` path (or blank, to use auto-discovery)."
-      - "`CONTAINER_FACTORY_IMAGE_TAGS` is referenced by `dotnetPreRelease()`'s image-tag lookup but never defined anywhere in this template -- confirm it actually exists at group level rather than assuming, since (unlike the Artifactory variables) it isn't something we've seen defined elsewhere."
-      - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), an unintentional typo rather than a deliberate distinction. Worth a fix in the shared `dso-templates/ci-cd-components/pipeline-templates` project rather than working around it here."
-      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the complete, correct list of deployment tiers this template's deploy jobs actually use -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
   - name: dotnet-framework-iis-ci-cd
     files:
       - target_path: .gitlab-ci.yml
@@ -388,8 +473,6 @@ templates:
       notes:
       - "`package:test`'s script reads `TestAssemblyFilter` and `VSTEST_PATH`, neither of which the shared template defines anywhere -- without them `Get-ChildItem -Filter $env:TestAssemblyFilter` matches nothing and the `vstest.console.exe` invocation has nothing to run, so the job silently produces no test results (it won't fail the pipeline itself since `package:test` is `allow_failure: true`). `TestAssemblyFilter` is per-app (e.g. `*.Tests.dll`); `VSTEST_PATH` looks like a fixed path on the shared Windows runner pool, so confirm it already exists at group level rather than assuming -- we don't have independent confirmation of that the way we do for `ARTIFACTORY_URL` elsewhere."
       - "Fill in the `<path to .csproj file>` placeholder in `.bumpversion.cfg` with this app's real .csproj path before merging, or `pre:config`/`bump:version` will fail."
-      - "The shared template gives `staging` and `staging-dr` the identical GitLab environment name (`Staging`), so as written they can't actually be scoped to different values via GitLab's per-variable Environment scope; `production`/`production-dr` also use inconsistent casing (`production` vs `Production`), an unintentional typo rather than a deliberate distinction. Worth a fix in the shared `dso-templates/ci-cd-components/pipeline-templates` project rather than working around it here."
-      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with the complete, correct list of deployment tiers this template's deploy jobs actually use -- these are \"Run pipeline\"-prompted variables, not CI/CD Settings variables, so there's nothing to configure in Settings for them."
   - name: dotnet-ansible-ci-cd
     files:
       - target_path: .gitlab-ci.yml
@@ -437,6 +520,9 @@ templates:
           options:
           - "Yes"
           - "No"
+      - target_path: version.txt
+        source_path: files/version.txt
+        source: local
     detect: ["*.dtproj"]
     mr_checklist:
       group_level:
@@ -473,11 +559,7 @@ templates:
       - PRODDR_WINRM_PASSWORD
       - PRODDR_SSIS_FOLDER_NAME
       notes:
-      - "`version.txt` must exist at the repo root in the format `version: X.Y.Z` -- read by `ssisPreConfigArtifacts()`/`bumpVersion()`. There's no `.bumpversion.cfg` or `bumpversion` CLI for this template; version bumping is done natively in PowerShell."
-      - "This template authenticates to Artifactory with a Bearer token (`ARTIFACTORY_TOKEN`) rather than the `ARTIFACTORY_USER`/`ARTIFACTORY_PASSWORD` basic-auth pattern the other templates use."
-      - "`UAT_*` variables back the `staging` deployment tier (`ssis:deploy:staging`) -- this project's naming convention for that environment, not a mismatch."
       - "`DEVENV_PATH` is set to blank (`\"\"`) in the generated `.gitlab-ci.yml`, overriding the shared template's hardcoded Visual Studio path default -- set it to this project's actual `devenv.com` path on the Windows runner it builds on."
-      - "`DEPLOY_VARIABLE` and `CREATE_RELEASE` are re-declared in the generated `.gitlab-ci.yml` with a corrected tier list -- the shared template's own hint text lists a `staging-pp` value that no deploy job actually checks for (the real job is `ssis:deploy:performance`, checking `\"performance\"`), so anyone typing `staging-pp` per the original hint would trigger no deployment at all."
 
   # --- Infra-only ---
   - name: terraform-cd
@@ -497,7 +579,59 @@ templates:
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/ansible-cd.gitlab.yml
+        extra_variables:
+        - name: DEPLOY_VARIABLE
+          value: development
+          description: "Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+          options:
+          - development
+          - testing
+          - staging
+          - staging-dr
+          - performance
+          - production
+          - production-dr
+        - name: CREATE_RELEASE
+          value: "No"
+          description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+          options:
+          - "Yes"
+          - "No"
+      - target_path: VERSION
+        source_path: files/VERSION
+        source: local
     detect: ["ansible.cfg", "playbook.yml", "site.yml"]
+    mr_checklist:
+      per_project:
+      - ANSIBLE_PROJECT_SCM_URL
+      - DEV_ANS_PROJECT_NAME
+      - DEV_ANS_TEMPLATE_NAME
+      - DEV_ANS_JOB_INVENTORY
+      - DEV_ENV
+      - QA_ANS_PROJECT_NAME
+      - QA_ANS_TEMPLATE_NAME
+      - QA_ANS_JOB_INVENTORY
+      - QA_ENV
+      - UAT_ANS_PROJECT_NAME
+      - UAT_ANS_TEMPLATE_NAME
+      - UAT_ANS_JOB_INVENTORY
+      - UAT_ENV
+      - DR_ANS_PROJECT_NAME
+      - DR_ANS_TEMPLATE_NAME
+      - DR_ANS_JOB_INVENTORY
+      - DR_ENV
+      - PERF_ANS_PROJECT_NAME
+      - PERF_ANS_TEMPLATE_NAME
+      - PERF_ANS_JOB_INVENTORY
+      - PERF_ENV
+      - PROD_ANS_PROJECT_NAME
+      - PROD_ANS_TEMPLATE_NAME
+      - PROD_ANS_JOB_INVENTORY
+      - PROD_ENV
+      - PROD_DR_ANS_PROJECT_NAME
+      - PROD_DR_ANS_TEMPLATE_NAME
+      - PROD_DR_ANS_JOB_INVENTORY
+      - PROD_DR_ENV
   # CAUTION: unlike the other bundles, a project this detect rule matches
   # already HAS a flyway.conf with real per-app DB settings -- applying
   # this template replaces it with the generic files/flyway.conf

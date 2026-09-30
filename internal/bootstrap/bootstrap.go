@@ -216,22 +216,22 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 // mrDescription renders a template's MRChecklist (if any) as a checklist
 // for the MR body -- these are CI/CD variables this tool has no value for
 // (per-project app config, per-environment secrets/hosts), so the best it
-// can do is remind whoever reviews the MR to configure them by hand.
-// Returns "" when the template has no checklist.
+// can do is remind whoever reviews the MR to configure them by hand. Every
+// template gets a standing reminder to set the project's CMDB ID Topic,
+// regardless of whether it has a checklist.
 func mrDescription(tmpl *config.Template) string {
-	if tmpl == nil || tmpl.MRChecklist == nil {
-		return ""
-	}
-	checklist := tmpl.MRChecklist
-	hasPerEnv := checklist.PerEnvironment != nil && len(checklist.PerEnvironment.Variables) > 0
-	if len(checklist.GroupLevel) == 0 && len(checklist.PerProject) == 0 && !hasPerEnv && len(checklist.Notes) == 0 {
-		return ""
-	}
-
 	var b strings.Builder
 	b.WriteString("This MR adds the CI/CD template files. The following still need to be " +
 		"configured manually in this project's CI/CD settings -- this tool has no way " +
 		"to know their values.\n")
+
+	b.WriteString("\n## Project settings\n\n" +
+		"- [ ] Add this application's CMDB ID as a Topic on the project (Settings > General > Topics).\n")
+
+	if tmpl == nil || tmpl.MRChecklist == nil {
+		return b.String()
+	}
+	checklist := tmpl.MRChecklist
 
 	if len(checklist.GroupLevel) > 0 {
 		b.WriteString("\n## Group-level CI/CD variables\n\n" +
@@ -247,7 +247,7 @@ func mrDescription(tmpl *config.Template) string {
 			fmt.Fprintf(&b, "- [ ] `%s`\n", v)
 		}
 	}
-	if hasPerEnv {
+	if checklist.PerEnvironment != nil && len(checklist.PerEnvironment.Variables) > 0 {
 		envs := checklist.PerEnvironment.Environments
 		envList := make([]string, len(envs))
 		for i, e := range envs {
