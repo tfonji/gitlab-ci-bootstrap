@@ -323,9 +323,82 @@ templates:
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/node-openshift-ci-cd.gitlab.yml
+        extra_variables:
+        - name: DEPLOY_VARIABLE
+          value: development
+          description: "Build/Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+          options:
+          - development
+          - testing
+          - staging
+          - staging-dr
+          - performance
+          - production
+          - production-dr
+        - name: CREATE_RELEASE
+          value: "No"
+          description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+          options:
+          - "Yes"
+          - "No"
       - target_path: .npmrc
         source_path: files/npmrc
         source: local
+    mr_checklist:
+      group_level:
+      - ARTIFACTORY_USER
+      - ARTIFACTORY_PASSWORD
+      - ARTIFACTORY_SNAPSHOT_REPO
+      - ARTIFACTORY_RELEASE_REPO
+      - ARTIFACTORY_NODE_DEV_REPO
+      - ARTIFACTORY_NODE_PROD_REPO
+      per_project:
+      - CYBERARK_APP_NAME
+      - APP_ID
+      - OSE_INSTANCE
+      - CYBERARK_DEV_APP_ID
+      - CYBERARK_DEV_SAFE_ID
+      - CYBERARK_QA_APP_ID
+      - CYBERARK_QA_SAFE_ID
+      - CYBERARK_UAT_APP_ID
+      - CYBERARK_UAT_SAFE_ID
+      - CYBERARK_DR_APP_ID
+      - CYBERARK_DR_SAFE_ID
+      - CYBERARK_PERF_APP_ID
+      - CYBERARK_PERF_SAFE_ID
+      - CYBERARK_PROD_APP_ID
+      - CYBERARK_PROD_SAFE_ID
+      - CYBERARK_PROD_DR_APP_ID
+      - CYBERARK_PROD_DR_SAFE_ID
+      - OSE_DEV_USERNAME
+      - OSE_DEV_PASSWORD
+      - OSE_QA_USERNAME
+      - OSE_QA_PASSWORD
+      - OSE_UAT_USERNAME
+      - OSE_UAT_PASSWORD
+      - OSE_UAT_DRUSERNAME
+      - OSE_UAT_DRPASSWORD
+      - OSE_PERF_USERNAME
+      - OSE_PERF_PASSWORD
+      - OSE_PROD_USERNAME
+      - OSE_PROD_PASSWORD
+      - OSE_PROD_DRUSERNAME
+      - OSE_PROD_DRPASSWORD
+      - OSE_PERF_HOST_URL
+      - OSE_UAT_DRHOST_URL
+      - OSE_PROD_DRHOST_URL
+      - OSE_DEV_PROJECT
+      - OSE_QA_PROJECT
+      - OSE_UAT_PROJECT
+      - OSE_DR_PROJECT
+      - OSE_PERF_PROJECT
+      - OSE_PROD_PROJECT
+      - OSE_PROD_DR_PROJECT
+      notes:
+      - "Add a deploy `*.yml` manifest and either `application.properties` or `application.yml` under `k8s/<environment>/` in this repo for every environment you deploy to (development, testing, staging, staging-dr, performance, production, production-dr) -- the shared template hard-fails (OPE002/OPE003) without them."
+      - "If this app doesn't use CyberArk, set `CYBERARK_ENABLED` to `0` as a project variable to skip the CyberArk app/safe ID requirements above (it defaults to `1`/enabled)."
+      - "Set `APPDYNAMICS_ENABLED` to `YES` as a project variable only if this app uses AppDynamics -- it defaults to `NO` and the deploy job skips the AppDynamics CyberArk lookup when off."
+      - "Override `OSE_PROJECT_NAME`'s default (currently `gen-ui-dev`, a leftover example from another app) with this app's own OpenShift namespace if you ever trigger a manual pipeline run outside the standard branch/tag rules -- the per-environment `OSE_*_PROJECT` variables above already cover the normal deploy jobs."
   - name: node-openshift-helm-ci-cd
     files:
       - target_path: .gitlab-ci.yml
