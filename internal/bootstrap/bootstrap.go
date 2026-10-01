@@ -71,7 +71,7 @@ type Result struct {
 }
 
 func branchName(templateName string) string {
-	return fmt.Sprintf("bootstrap/add-%s", templateName)
+	return fmt.Sprintf("feature/add-%s", templateName)
 }
 
 // Plan compares every file in the named template's bundle against the
@@ -289,25 +289,31 @@ func (b *Bootstrapper) content(f config.FileSpec) (string, error) {
 // includeStub generates a GitLab CI file that does nothing but include the
 // shared template by reference, e.g.:
 //
+//	variables:
+//	  DEPLOY_VARIABLE:
+//	    value: "development"
+//	    ...
+//
 //	include:
 //	  - project: dso-templates/ci-cd-components/pipeline-templates
 //	    ref: master
 //	    file: 'templates/java-gradle-openshift-ci-cd.gitlab.yml'
 //
-// This is deliberate: the shared project's content is never copied into
-// the target project, so template updates there apply automatically
-// without this tool needing to re-run. When extra is non-empty, a
-// `variables:` block is appended after the include, overriding whatever
-// default the shared template sets for each of those names. A variable
-// with only a Value renders as a plain scalar; one with a Description
-// and/or Options renders in GitLab's extended form instead, so overriding
-// a "Run pipeline"-prompted variable (e.g. DEPLOY_VARIABLE) keeps -- or
-// corrects -- its description/dropdown rather than flattening it away.
+// The include is deliberately last: the shared project's content is never
+// copied into the target project, so template updates there apply
+// automatically without this tool needing to re-run, and putting variable
+// overrides above the include (rather than after it) matches how these
+// files are conventionally hand-written. When extra is non-empty, the
+// `variables:` block above it overrides whatever default the shared
+// template sets for each of those names. A variable with only a Value
+// renders as a plain scalar; one with a Description and/or Options
+// renders in GitLab's extended form instead, so overriding a "Run
+// pipeline"-prompted variable (e.g. DEPLOY_VARIABLE) keeps -- or corrects
+// -- its description/dropdown rather than flattening it away.
 func includeStub(remote config.RemoteSource, file string, extra []config.ExtraVariable) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "include:\n  - project: %s\n    ref: %s\n    file: '%s'\n", remote.ProjectPath, remote.Ref, file)
 	if len(extra) > 0 {
-		b.WriteString("\nvariables:\n")
+		b.WriteString("variables:\n")
 		for _, v := range extra {
 			if v.Description == "" && len(v.Options) == 0 {
 				fmt.Fprintf(&b, "  %s: %q\n", v.Name, v.Value)
@@ -324,7 +330,9 @@ func includeStub(remote config.RemoteSource, file string, extra []config.ExtraVa
 				}
 			}
 		}
+		b.WriteString("\n")
 	}
+	fmt.Fprintf(&b, "include:\n  - project: %s\n    ref: %s\n    file: '%s'\n", remote.ProjectPath, remote.Ref, file)
 	return b.String()
 }
 
