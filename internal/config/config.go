@@ -94,7 +94,7 @@ const (
 // single include-sourced file (the main .gitlab-ci.yml, referencing the
 // separate dso-templates/ci-cd-components/pipeline-templates project); a
 // template can also bundle locally-sourced files this tool owns (e.g.
-// settings.xml with Nexus/Artifactory credentials) that have no reason to
+// settings.xml with Artifactory credentials) that have no reason to
 // live in, or be referenced from, that shared templates project.
 type FileSpec struct {
 	TargetPath string `yaml:"target_path"`      // path in the destination project
