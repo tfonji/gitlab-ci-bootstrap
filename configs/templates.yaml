@@ -264,6 +264,7 @@ templates:
       - ARTIFACTORY_PASSWORD
       - ARTIFACTORY_MAVEN_DEV_REPO
       - ARTIFACTORY_MAVEN_PROD_REPO
+      - ANT_CONTAINER_REGISTRY_PATH
       per_environment:
         environments: [development, testing, staging, staging-dr, performance, production, production-dr]
         variables:
@@ -274,6 +275,7 @@ templates:
         - PACKAGE_FOLDER
       notes:
       - "`PACKAGE_FOLDER` is only actually required when `BACKUP_ENABLED` is `true` (the deploy script's own validation is conditional on it) -- still worth setting per environment so backups work if it's ever turned on."
+      - "`is_multi_file` defaults to `yes` in the shared template, so `MULTI_FILE_SOURCE_DIR` (default `dist`) is active by default -- it must point at this app's actual Ant build output directory, or set `is_multi_file: \"no\"` to fall back to packaging `*.war` files instead."
       - "`PROPERTY_FILE` already defaults to `app.properties` directly in the shared template (unlike `java-ant-tomcat-ci-cd`, where it had no default) -- only override it if this app's properties file lives somewhere else, and update `.bumpversion.cfg`'s `[bumpversion:file:app.properties]` path to match."
 
   # --- Java: Lambda ---
