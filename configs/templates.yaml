@@ -305,6 +305,15 @@ templates:
         source_path: files/npmrc
         source: local
     detect: ["package.json"]
+    mr_checklist:
+      group_level:
+      - ARTIFACTORY_USER
+      - ARTIFACTORY_PASSWORD
+      - ARTIFACTORY_NODE_DEV_REPO
+      - ARTIFACTORY_NODE_PROD_REPO
+      - ARTIFACTORY_NODE_VIRTUAL_REPO
+      notes:
+      - "If this is an Angular app (`is_angular_build` set to `true`), also set `ARTIFACTORY_GENERIC_REPO` as a project variable -- the publish job's alternate Angular path needs it and it has no default."
   - name: node-ecs-ci-cd
     files:
       - target_path: .gitlab-ci.yml
@@ -352,6 +361,7 @@ templates:
       - ARTIFACTORY_RELEASE_REPO
       - ARTIFACTORY_NODE_DEV_REPO
       - ARTIFACTORY_NODE_PROD_REPO
+      - ARTIFACTORY_NODE_VIRTUAL_REPO
       per_project:
       - CYBERARK_APP_NAME
       - APP_ID
@@ -399,6 +409,7 @@ templates:
       - "If this app doesn't use CyberArk, set `CYBERARK_ENABLED` to `0` as a project variable to skip the CyberArk app/safe ID requirements above (it defaults to `1`/enabled)."
       - "Set `APPDYNAMICS_ENABLED` to `YES` as a project variable only if this app uses AppDynamics -- it defaults to `NO` and the deploy job skips the AppDynamics CyberArk lookup when off."
       - "Override `OSE_PROJECT_NAME`'s default (currently `gen-ui-dev`, a leftover example from another app) with this app's own OpenShift namespace if you ever trigger a manual pipeline run outside the standard branch/tag rules -- the per-environment `OSE_*_PROJECT` variables above already cover the normal deploy jobs."
+      - "If this is an Angular app (`is_angular_build` set to `true`), also set `ARTIFACTORY_GENERIC_REPO` as a project variable -- the publish job's alternate Angular path needs it and it has no default."
   - name: node-openshift-helm-ci-cd
     files:
       - target_path: .gitlab-ci.yml
