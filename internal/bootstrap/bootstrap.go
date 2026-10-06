@@ -138,6 +138,7 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	if len(openMRs) > 0 {
 		result.Status = "skipped"
 		result.Description = fmt.Sprintf("MR !%d already open", openMRs[0].IID)
+		result.MRURL = openMRs[0].WebURL
 		return result, nil
 	}
 

@@ -19,6 +19,7 @@ import (
 	"github.com/tfonji/gitlab-ci-bootstrap/internal/bootstrap"
 	"github.com/tfonji/gitlab-ci-bootstrap/internal/config"
 	"github.com/tfonji/gitlab-ci-bootstrap/internal/gitlabclient"
+	"github.com/tfonji/gitlab-ci-bootstrap/internal/report"
 )
 
 func main() {
@@ -55,6 +56,10 @@ Commands:
   plan           diff a template's bundle against a project, write plan.json
   apply          commit a prior plan's files and open one MR
   list-templates print every template name from configs/templates.yaml`)
+}
+
+func terminal() *report.Terminal {
+	return report.NewTerminal(os.Stderr, report.UseColor(os.Stderr))
 }
 
 func newBootstrapper(gitlabURL, token, templatesFile string) (*bootstrap.Bootstrapper, error) {
@@ -131,9 +136,7 @@ func runPlan(args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, f := range plan.Files {
-		fmt.Fprintf(os.Stderr, "%s: %s (%s)\n", f.TargetPath, f.Action, f.Description)
-	}
+	terminal().WritePlan(plan)
 	return writeJSON(*out, plan)
 }
 
@@ -166,7 +169,7 @@ func runApply(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "%s: %s\n", result.Status, result.Description)
+	terminal().WriteResult(&plan, result)
 	if err := writeJSON(*out, result); err != nil {
 		return err
 	}
