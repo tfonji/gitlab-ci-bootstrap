@@ -286,6 +286,21 @@ func (b *Bootstrapper) content(f config.FileSpec) (string, error) {
 	return includeStub(b.Templates.RemoteSource, f.SourcePath, f.ExtraVariables), nil
 }
 
+// globalExtraVariables are written into the `variables:` block of every
+// generated .gitlab-ci.yml stub, for every template, ahead of that
+// template's own ExtraVariables -- analogous to the CMDB ID reminder in
+// mrDescription, this is a standing requirement across all MRs this tool
+// opens, so it lives here in code rather than being copy-pasted into each
+// template entry in templates.yaml.
+var globalExtraVariables = []config.ExtraVariable{
+	{
+		Name:        "LOG_LEVEL",
+		Value:       "INFO",
+		Description: "Application log level (INFO | WARN | DEBUG | ERROR)",
+		Options:     []string{"INFO", "WARN", "DEBUG", "ERROR"},
+	},
+}
+
 // includeStub generates a GitLab CI file that does nothing but include the
 // shared template by reference, e.g.:
 //
@@ -312,9 +327,10 @@ func (b *Bootstrapper) content(f config.FileSpec) (string, error) {
 // -- its description/dropdown rather than flattening it away.
 func includeStub(remote config.RemoteSource, file string, extra []config.ExtraVariable) string {
 	var b strings.Builder
-	if len(extra) > 0 {
+	all := append(append([]config.ExtraVariable{}, globalExtraVariables...), extra...)
+	if len(all) > 0 {
 		b.WriteString("variables:\n")
-		for _, v := range extra {
+		for _, v := range all {
 			if v.Description == "" && len(v.Options) == 0 {
 				fmt.Fprintf(&b, "  %s: %q\n", v.Name, v.Value)
 				continue
