@@ -73,6 +73,9 @@ type Plan struct {
 	// the project couldn't be resolved) -- a batch run records it and moves on
 	// so one bad project doesn't block the rest; Apply reports it as failed.
 	Error string `json:"error,omitempty"`
+	// Skipped is why a project was deliberately left out of a batch (archived,
+	// empty, a fork, excluded); Apply passes it through as a "skipped" Result.
+	Skipped string `json:"skipped,omitempty"`
 }
 
 // Result is the outcome of Apply.
@@ -238,6 +241,10 @@ func templatePropertyFiles(tmpl *config.Template) []string {
 // when there is nothing to commit.
 func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	result := &Result{ProjectID: plan.ProjectID, ProjectPath: plan.ProjectPath, Template: plan.Template}
+	if plan.Skipped != "" {
+		result.Status, result.Description = "skipped", plan.Skipped
+		return result, nil
+	}
 
 	// The branch is recreated from BaseBranch, so every file is checked
 	// against BaseBranch, never the old branch's contents.

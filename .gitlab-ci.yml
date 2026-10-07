@@ -8,7 +8,17 @@ workflow:
 
 variables:
   PROJECT_ID:
-    description: "Target project(s): numeric ID or path_with_namespace. Comma-separate several (e.g. 123,456,group/proj) to apply the same template to each."
+    description: "Target project(s): numeric ID or path_with_namespace. Comma-separate several (e.g. 123,456,group/proj) to apply the same template to each. Leave blank when using GROUP_ID."
+    value: ""
+  GROUP_ID:
+    description: "Target group: numeric ID or path. Every project in it gets the template, except archived, empty and forked ones (combine with PROJECT_ID to add more). Leave blank to use only PROJECT_ID."
+    value: ""
+  INCLUDE_SUBGROUPS:
+    description: "GROUP_ID only: also include projects in its subgroups."
+    value: "true"
+    options: [ "true", "false" ]
+  EXCLUDE_PROJECT_IDS:
+    description: "Project IDs or paths, comma-separated, never to touch -- applies to PROJECT_ID and GROUP_ID alike."
     value: ""
   TEMPLATE_NAME:
     description: "CI/CD template to add. Run the 'suggest' job first if unsure -- check its log for a hint before picking here."

@@ -31,6 +31,7 @@ type fakeGitLab struct {
 	commit       map[string]any
 	mrBody       map[string]any
 	mrCount      int
+	groupQuery   map[string]string // include_subgroups / with_shared as last requested
 }
 
 func (f *fakeGitLab) record(call string) {
@@ -46,6 +47,29 @@ func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(v)
 	}
 	switch {
+	case r.URL.Path == "/api/v4/groups/5/projects":
+		f.mu.Lock()
+		f.groupQuery = map[string]string{
+			"include_subgroups": r.URL.Query().Get("include_subgroups"),
+			"with_shared":       r.URL.Query().Get("with_shared"),
+		}
+		f.mu.Unlock()
+		// Two pages, to prove pagination is followed.
+		if r.URL.Query().Get("page") == "2" {
+			writeJSON([]map[string]any{
+				{"id": 10, "path_with_namespace": "acme/sub/forked", "forked_from_project": map[string]any{"path_with_namespace": "other/orig"}},
+				{"id": 11, "path_with_namespace": "acme/sub/excluded"},
+			})
+			return
+		}
+		w.Header().Set("X-Next-Page", "2")
+		writeJSON([]map[string]any{
+			{"id": 7, "path_with_namespace": "acme/app"},
+			{"id": 8, "path_with_namespace": "acme/old", "archived": true},
+			{"id": 9, "path_with_namespace": "acme/blank", "empty_repo": true},
+		})
+	case r.URL.Path == "/api/v4/groups/404/projects":
+		http.Error(w, `{"message":"404 Group Not Found"}`, http.StatusNotFound)
 	case r.URL.Path == "/api/v4/projects/7":
 		writeJSON(map[string]any{"id": 7, "path_with_namespace": "acme/app", "default_branch": "main"})
 	case p == "/repository/tags":
@@ -354,5 +378,126 @@ func TestMRDescriptionLinksArtifactoryOnboardingOnlyForCITemplates(t *testing.T)
 	}
 	if strings.Contains(mrDescription(nil, nil), artifactoryOnboardingURL) {
 		t.Error("no template means no CI component, so no Artifactory link")
+	}
+}
+
+func planByPath(plans []*Plan) map[string]*Plan {
+	m := map[string]*Plan{}
+	for _, p := range plans {
+		m[p.ProjectPath] = p
+	}
+	return m
+}
+
+func TestPlanAllExpandsGroupAndSkipsFilteredProjects(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{}}
+	b := newTestBootstrapper(t, fake)
+
+	var streamed int
+	plans := b.PlanAll(context.Background(), PlanRequest{
+		Template: "demo",
+		Groups:   []string{"5"},
+		Exclude:  []string{"11"},
+		Group:    GroupOptions{IncludeSubgroups: true},
+	}, func(*Plan) { streamed++ })
+
+	if streamed != len(plans) || len(plans) != 5 {
+		t.Fatalf("got %d plans (%d streamed), want 5 across both pages: %+v", len(plans), streamed, plans)
+	}
+	if fake.groupQuery["include_subgroups"] != "true" || fake.groupQuery["with_shared"] != "false" {
+		t.Errorf("group listing query = %v, want include_subgroups=true with_shared=false", fake.groupQuery)
+	}
+	got := planByPath(plans)
+	if p := got["acme/app"]; p.Skipped != "" || p.Error != "" || p.Branch == "" {
+		t.Errorf("acme/app should be planned normally: %+v", p)
+	}
+	for path, want := range map[string]string{
+		"acme/old":          "archived project",
+		"acme/blank":        "empty repository",
+		"acme/sub/forked":   "fork of other/orig",
+		"acme/sub/excluded": "excluded via EXCLUDE_PROJECT_IDS",
+	} {
+		if got[path].Skipped != want {
+			t.Errorf("%s skipped = %q, want %q", path, got[path].Skipped, want)
+		}
+	}
+}
+
+func TestPlanAllPassesSubgroupsFlagOn(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{}}
+	b := newTestBootstrapper(t, fake)
+
+	b.PlanAll(context.Background(), PlanRequest{Template: "demo", Groups: []string{"5"}}, nil)
+	if fake.groupQuery["include_subgroups"] != "false" {
+		t.Errorf("include_subgroups = %q, want false", fake.groupQuery["include_subgroups"])
+	}
+}
+
+func TestPlanAllDedupesAndExplicitProjectsBypassFiltersButNotExclude(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{}}
+	b := newTestBootstrapper(t, fake)
+
+	// 7 is named and also in the group; 8 (archived) is named explicitly, so
+	// the archived filter must not apply to it; 9 is named but also excluded.
+	plans := b.PlanAll(context.Background(), PlanRequest{
+		Template: "demo",
+		Projects: []string{"7", "8", "9"},
+		Groups:   []string{"5"},
+		Exclude:  []string{"9"},
+		Group:    GroupOptions{},
+	}, nil)
+
+	count := map[int64]int{}
+	for _, p := range plans {
+		count[p.ProjectID]++
+	}
+	for id, n := range count {
+		if n != 1 {
+			t.Errorf("project %d planned %d times, want once", id, n)
+		}
+	}
+	for _, p := range plans {
+		switch p.ProjectID {
+		case 8:
+			if p.Skipped != "" {
+				t.Errorf("explicitly named archived project was skipped: %q", p.Skipped)
+			}
+		case 9:
+			if p.Skipped != "excluded via EXCLUDE_PROJECT_IDS" {
+				t.Errorf("excluded project: skipped = %q", p.Skipped)
+			}
+		}
+	}
+}
+
+func TestPlanAllUnknownGroupIsAFailedPlanAndDoesNotStopTheRest(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{}}
+	b := newTestBootstrapper(t, fake)
+
+	plans := b.PlanAll(context.Background(), PlanRequest{Template: "demo", Projects: []string{"7"}, Groups: []string{"404"}}, nil)
+	if len(plans) != 2 {
+		t.Fatalf("got %d plans, want 2: %+v", len(plans), plans)
+	}
+	if plans[0].Error != "" || plans[0].Branch == "" {
+		t.Errorf("project 7 should still be planned: %+v", plans[0])
+	}
+	if plans[1].ProjectPath != "group 404" || plans[1].Error == "" {
+		t.Errorf("unknown group should be a failed plan: %+v", plans[1])
+	}
+}
+
+func TestApplyPassesSkippedPlanThrough(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{}}
+	b := newTestBootstrapper(t, fake)
+
+	res, err := b.Apply(context.Background(), &Plan{ProjectID: 8, ProjectPath: "acme/old", Template: "demo", Skipped: "archived project"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "skipped" || res.Description != "archived project" {
+		t.Errorf("result = %+v, want skipped: archived project", res)
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("skipped plan made calls: %v", fake.calls)
 	}
 }

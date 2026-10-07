@@ -51,7 +51,13 @@ func UseColor(f *os.File) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
+// WritePlan prints nothing for a project that was filtered out of a batch: in a
+// big group the skips would drown the real work, so they appear only in the
+// batch summary.
 func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
+	if plan.Skipped != "" {
+		return
+	}
 	t.header("GITLAB CI BOOTSTRAP PLAN", plan)
 
 	if plan.Error != "" {
@@ -83,6 +89,9 @@ func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
 }
 
 func (t *Terminal) WriteResult(plan *bootstrap.Plan, result *bootstrap.Result) {
+	if plan.Skipped != "" {
+		return
+	}
 	t.header("GITLAB CI BOOTSTRAP APPLY", plan)
 
 	switch result.Status {
@@ -107,27 +116,32 @@ func (t *Terminal) WriteResult(plan *bootstrap.Plan, result *bootstrap.Result) {
 func (t *Terminal) WritePlanSummary(plans []*bootstrap.Plan) {
 	t.println(t.paint(ansiBold+ansiCyan, fmt.Sprintf("BATCH PLAN SUMMARY (%d projects)", len(plans))))
 	t.rule()
-	failed := 0
+	planned, skipped, failed := 0, 0, 0
 	for _, p := range plans {
-		if p.Error != "" {
+		switch {
+		case p.Error != "":
 			failed++
 			t.println(fmt.Sprintf("%s %s — %s", t.paint(ansiRed, "✗"), p.ProjectPath, t.paint(ansiRed, p.Error)))
-			continue
-		}
-		changes := 0
-		for _, f := range p.Files {
-			if f.Action == "create" || f.Action == "update" {
-				changes++
+		case p.Skipped != "":
+			skipped++
+			t.println(fmt.Sprintf("%s %s — skipped: %s", t.paint(ansiDim, "-"), p.ProjectPath, p.Skipped))
+		default:
+			planned++
+			changes := 0
+			for _, f := range p.Files {
+				if f.Action == "create" || f.Action == "update" {
+					changes++
+				}
 			}
+			symbol, color := "+", ansiGreen
+			if changes == 0 {
+				symbol, color = "·", ansiDim
+			}
+			t.println(fmt.Sprintf("%s %s — %d file(s) to change", t.paint(color, symbol), p.ProjectPath, changes))
 		}
-		symbol, color := "+", ansiGreen
-		if changes == 0 {
-			symbol, color = "·", ansiDim
-		}
-		t.println(fmt.Sprintf("%s %s — %d file(s) to change", t.paint(color, symbol), p.ProjectPath, changes))
 	}
 	t.rule()
-	t.println(fmt.Sprintf("%d planned, %d failed", len(plans)-failed, failed))
+	t.println(fmt.Sprintf("%d planned, %d skipped, %d failed", planned, skipped, failed))
 	t.println("")
 }
 

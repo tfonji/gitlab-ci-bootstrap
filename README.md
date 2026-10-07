@@ -31,7 +31,15 @@ many projects in a batch."
 
 Run this tool's pipeline (see [.gitlab-ci.yml](.gitlab-ci.yml)) with:
 
-- `PROJECT_ID` -- the target project (numeric ID or `group/subgroup/project` path)
+- `PROJECT_ID` -- the target project (s): numeric ID or `group/subgroup/project` path, comma-separated for several
+- `GROUP_ID` -- optional; a group whose projects are all targets (alone or together with `PROJECT_ID`). Without it, only
+  `PROJECT_ID` is used.
+    - `INCLUDE_SUBGROUPS` (default `true`) -- also include subgroup projects
+    - Archived projects, empty repositories and forks are always skipped (not configurable); they appear as "skipped" in
+      the batch summary and are not planned. This applies to group members only: a project named in `PROJECT_ID` is
+      always planned.
+    - Group mode needs no detection, always overwrites an existing `.gitlab-ci.yml`, and has no project cap.
+- `EXCLUDE_PROJECT_IDS` -- project IDs or paths never to touch, whether named directly or reached through a group
 - `TEMPLATE_NAME` -- picked from the dropdown (see [configs/templates.yaml](configs/templates.yaml) for what each one bundles)
 
 Stages: `build → suggest → plan → apply`
@@ -136,6 +144,7 @@ export GITLAB_TOKEN=...
 ./bin/gitlab-ci-bootstrap list-templates
 ./bin/gitlab-ci-bootstrap suggest --project=group/my-app
 ./bin/gitlab-ci-bootstrap plan --project=group/my-app --template=java-maven-ci --out=plan.json
+./bin/gitlab-ci-bootstrap plan --group=group/team --exclude-projects=123,group/team/legacy --template=java-maven-ci --out=plan.json
 ./bin/gitlab-ci-bootstrap apply --plan=plan.json --out=result.json
 ```
 

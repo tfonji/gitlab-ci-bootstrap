@@ -1,9 +1,9 @@
 // Command gitlab-ci-bootstrap adds a CI/CD template bundle (.gitlab-ci.yml
-// and whatever else it needs, e.g. settings.xml) to one project, as a merge
-// request. Meant to be run from a GitLab CI pipeline where a human picks
-// the target project and a template from a dropdown (see .gitlab-ci.yml) --
-// unlike gitlab-post-migration, this is a per-project, human-driven tool,
-// not a batch reconciler.
+// and whatever else it needs, e.g. settings.xml) to one or more projects --
+// named individually or every project in a group -- as a merge request each.
+// Meant to be run from a GitLab CI pipeline where a human picks the targets
+// and a template from a dropdown (see .gitlab-ci.yml) and then triggers apply
+// by hand.
 package main
 
 import (
@@ -14,8 +14,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	gitlab "gitlab.com/gitlab-org/api/client-go"
 
 	"gitlab-ci-bootstrap/internal/bootstrap"
 	"gitlab-ci-bootstrap/internal/config"
@@ -89,7 +87,7 @@ func runSuggest(args []string) error {
 	if err != nil {
 		return err
 	}
-	projectID, err := resolveProjectID(context.Background(), b, *project)
+	projectID, err := b.ResolveProjectID(context.Background(), *project)
 	if err != nil {
 		return err
 	}
@@ -112,6 +110,9 @@ func runPlan(args []string) error {
 	token := fs.String("token", os.Getenv("GITLAB_TOKEN"), "GitLab API token")
 	templatesFile := fs.String("templates", "configs/templates.yaml", "templates config file")
 	project := fs.String("project", os.Getenv("PROJECT_ID"), "target project ID or path; comma-separate several to apply the same template to each")
+	group := fs.String("group", os.Getenv("GROUP_ID"), "group ID or path; every project in it is a target except archived, empty and forked ones (comma-separate several)")
+	includeSubgroups := fs.Bool("include-subgroups", envBool("INCLUDE_SUBGROUPS", true), "with --group: also include projects of its subgroups")
+	exclude := fs.String("exclude-projects", os.Getenv("EXCLUDE_PROJECT_IDS"), "project IDs or paths (comma-separated) never to touch, whether named or reached through a group")
 	template := fs.String("template", os.Getenv("TEMPLATE_NAME"), "template name (see list-templates)")
 	out := fs.String("out", "plan.json", "output plan file")
 	if err := fs.Parse(args); err != nil {
@@ -121,9 +122,15 @@ func runPlan(args []string) error {
 		return fmt.Errorf("--template is required")
 	}
 
-	refs := splitProjects(*project)
-	if len(refs) == 0 {
-		return fmt.Errorf("--project is required")
+	req := bootstrap.PlanRequest{
+		Template: *template,
+		Projects: splitList(*project),
+		Groups:   splitList(*group),
+		Exclude:  splitList(*exclude),
+		Group:    bootstrap.GroupOptions{IncludeSubgroups: *includeSubgroups},
+	}
+	if len(req.Projects) == 0 && len(req.Groups) == 0 {
+		return fmt.Errorf("--project or --group is required")
 	}
 
 	b, err := newBootstrapper(*gitlabURL, *token, *templatesFile)
@@ -131,19 +138,8 @@ func runPlan(args []string) error {
 		return err
 	}
 
-	ctx := context.Background()
 	term := terminal()
-	plans := make([]*bootstrap.Plan, 0, len(refs))
-	failed := 0
-	for _, ref := range refs {
-		plan, err := planProject(ctx, b, ref, *template)
-		if err != nil {
-			plan = &bootstrap.Plan{ProjectPath: ref, Template: *template, Error: err.Error()}
-			failed++
-		}
-		term.WritePlan(plan)
-		plans = append(plans, plan)
-	}
+	plans := b.PlanAll(context.Background(), req, term.WritePlan)
 	if len(plans) > 1 {
 		term.WritePlanSummary(plans)
 	}
@@ -151,19 +147,24 @@ func runPlan(args []string) error {
 		return err
 	}
 	// A partial failure is recorded in the plan file and reported by apply;
-	// only fail the job when there is nothing at all to apply.
-	if failed == len(plans) {
+	// only fail the job when nothing could be planned at all (projects that
+	// were deliberately skipped don't count as failures).
+	failed, skipped := 0, 0
+	for _, p := range plans {
+		switch {
+		case p.Error != "":
+			failed++
+		case p.Skipped != "":
+			skipped++
+		}
+	}
+	switch {
+	case len(plans) == 0:
+		return fmt.Errorf("no projects found to plan")
+	case failed > 0 && failed+skipped == len(plans):
 		return fmt.Errorf("planning failed for every project")
 	}
 	return nil
-}
-
-func planProject(ctx context.Context, b *bootstrap.Bootstrapper, ref, template string) (*bootstrap.Plan, error) {
-	projectID, err := resolveProjectID(ctx, b, ref)
-	if err != nil {
-		return nil, err
-	}
-	return b.Plan(ctx, projectID, template)
 }
 
 func runApply(args []string) error {
@@ -232,9 +233,9 @@ func applyProject(ctx context.Context, b *bootstrap.Bootstrapper, plan *bootstra
 	return result
 }
 
-// splitProjects parses a comma-separated project list, dropping blanks and
-// duplicates while keeping order.
-func splitProjects(s string) []string {
+// splitList parses a comma-separated list, dropping blanks and duplicates
+// while keeping order.
+func splitList(s string) []string {
 	var refs []string
 	seen := map[string]bool{}
 	for _, p := range strings.Split(s, ",") {
@@ -264,20 +265,6 @@ func runListTemplates(args []string) error {
 	return nil
 }
 
-// resolveProjectID accepts either a numeric project ID or a
-// path_with_namespace and always returns the numeric ID, since some API
-// calls (repository tree, commits) are cleanest with it.
-func resolveProjectID(ctx context.Context, b *bootstrap.Bootstrapper, project string) (int64, error) {
-	if id, err := strconv.ParseInt(project, 10, 64); err == nil {
-		return id, nil
-	}
-	proj, _, err := b.Client.REST.Projects.GetProject(project, nil, gitlab.WithContext(ctx))
-	if err != nil {
-		return 0, fmt.Errorf("resolving project %q: %w", project, err)
-	}
-	return proj.ID, nil
-}
-
 func writeJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -291,4 +278,13 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envBool reads a true/false environment variable, falling back to def when
+// it is unset or unparseable.
+func envBool(key string, def bool) bool {
+	if v, err := strconv.ParseBool(os.Getenv(key)); err == nil {
+		return v
+	}
+	return def
 }
