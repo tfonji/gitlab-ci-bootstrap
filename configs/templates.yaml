@@ -396,6 +396,59 @@ templates:
       - target_path: .npmrc
         source_path: files/npmrc
         source: local
+  - name: node-iis-ci-cd
+    files:
+      - target_path: .gitlab-ci.yml
+        source_path: templates/node-iis-ci-cd.gitlab.yml
+        extra_variables:
+          - name: DEPLOY_VARIABLE
+            value: development
+            description: "Build/Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+            options:
+              - development
+              - testing
+              - staging
+              - staging-dr
+              - performance
+              - production
+              - production-dr
+          - name: CREATE_RELEASE
+            value: "No"
+            description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+            options:
+              - "Yes"
+              - "No"
+      - target_path: .npmrc
+        source_path: files/npmrc
+        source: local
+    mr_checklist:
+      group_level:
+        - ARTIFACTORY_USER
+        - ARTIFACTORY_PASSWORD
+        - ARTIFACTORY_NODE_DEV_REPO
+        - ARTIFACTORY_NODE_PROD_REPO
+        - ARTIFACTORY_NODE_VIRTUAL_REPO
+      per_project:
+        - DEVELOPMENT_DEPLOY_WHEN
+        - TESTING_DEPLOY_WHEN
+        - STAGING_DEPLOY_WHEN
+        - STAGING_DR_DEPLOY_WHEN
+        - PERFORMANCE_DEPLOY_WHEN
+      per_environment:
+        environments: [ development, testing, staging, staging-dr, performance, production, production-dr ]
+        variables:
+          - TARGET_HOST
+          - WINRM_USER
+          - WINRM_PASSWORD
+          - IIS_SITE
+          - IIS_APPPOOL
+          - DEPLOY_PATH
+          - BACKUP_ROOT
+      notes:
+        - "Set `IIS_APPPOOL`, `DEPLOY_PATH`, and `BACKUP_ROOT` for every environment -- the shared template's defaults are leftovers from another app (`ConfigManagementAPIPool`, `D:\\Inetpub\\WWWRoot\\ConfigManager-Api`, `D:\\backup\\inetpub\\wwwroot\\ConfigManager-Api`), and `IIS_SITE` defaults to `Default Web Site`."
+        - "Set `DEPLOY_PATH` to exactly the IIS site's physical path -- the deploy job's validation step compares the two and throws before deploying anything if they differ."
+        - "Set `is_angular_build` to `false` if this is not an Angular app -- the shared template defaults it to `true`, which makes the build run `ng build` from `src/` and the publish job package `dist/`. For an Angular app, keep the sources under `src/` and set `ANGULAR_CLI_VERSION` to the version this app uses (default `11`)."
+        - "Set `DEVELOPMENT_DEPLOY_WHEN`, `TESTING_DEPLOY_WHEN`, `STAGING_DEPLOY_WHEN`, `STAGING_DR_DEPLOY_WHEN`, and `PERFORMANCE_DEPLOY_WHEN` to `on_success` as project variables -- that is the default; for an environment whose deploy should behave differently, use `on_failure`, `always`, `manual`, or `never` instead."
   - name: node-lambda-ci-cd
     files:
       - target_path: .gitlab-ci.yml
