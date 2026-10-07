@@ -376,18 +376,14 @@ func mrDescription(tmpl *config.Template, plan *Plan) string {
 
 	writeVersionSection(&b, plan)
 
-	if tmpl == nil || tmpl.MRChecklist == nil {
-		return b.String()
+	var checklist *config.MRChecklist
+	if tmpl != nil {
+		checklist = tmpl.MRChecklist
 	}
-	checklist := tmpl.MRChecklist
+	writeGroupLevelSection(&b, checklist)
 
-	if len(checklist.GroupLevel) > 0 {
-		b.WriteString("\n## Group-level CI/CD variables\n\n" +
-			"These should already exist above this project (group or instance level) -- " +
-			"confirm rather than assume:\n\n")
-		for _, v := range checklist.GroupLevel {
-			fmt.Fprintf(&b, "- [ ] `%s`\n", v)
-		}
+	if checklist == nil {
+		return b.String()
 	}
 	if len(checklist.PerProject) > 0 {
 		b.WriteString("\n## Per-project CI/CD variables\n\n")
@@ -417,6 +413,37 @@ func mrDescription(tmpl *config.Template, plan *Plan) string {
 		}
 	}
 	return b.String()
+}
+
+// globalGroupVariables are group-level CI/CD variables every template
+// needs, each with the value it must have -- like the CMDB ID reminder, a
+// standing requirement across all MRs, so it lives here in code rather than
+// being repeated in every template's group_level list.
+var globalGroupVariables = []struct{ Name, Value string }{
+	{"IS_ARTIFACTORY_ENABLED", "true"},
+}
+
+// writeGroupLevelSection lists the group-level variables that should already
+// exist above the project: the global ones (with their required values), then
+// the template's own.
+func writeGroupLevelSection(b *strings.Builder, checklist *config.MRChecklist) {
+	var templateVars []string
+	if checklist != nil {
+		templateVars = checklist.GroupLevel
+	}
+	b.WriteString("\n## Group-level CI/CD variables\n\n" +
+		"These should already exist above this project (group or instance level) -- " +
+		"confirm rather than assume:\n\n")
+	global := map[string]bool{}
+	for _, v := range globalGroupVariables {
+		global[v.Name] = true
+		fmt.Fprintf(b, "- [ ] `%s` -- set to `%s`\n", v.Name, v.Value)
+	}
+	for _, v := range templateVars {
+		if !global[v] {
+			fmt.Fprintf(b, "- [ ] `%s`\n", v)
+		}
+	}
 }
 
 // writeVersionSection tells the reviewer what version was written where and
