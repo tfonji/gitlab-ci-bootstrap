@@ -17,10 +17,10 @@ import (
 
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 
-	"github.com/tfonji/gitlab-ci-bootstrap/internal/bootstrap"
-	"github.com/tfonji/gitlab-ci-bootstrap/internal/config"
-	"github.com/tfonji/gitlab-ci-bootstrap/internal/gitlabclient"
-	"github.com/tfonji/gitlab-ci-bootstrap/internal/report"
+	"gitlab-ci-bootstrap/internal/bootstrap"
+	"gitlab-ci-bootstrap/internal/config"
+	"gitlab-ci-bootstrap/internal/gitlabclient"
+	"gitlab-ci-bootstrap/internal/report"
 )
 
 func main() {

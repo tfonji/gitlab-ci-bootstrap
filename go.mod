@@ -1,4 +1,4 @@
-module github.com/tfonji/gitlab-ci-bootstrap
+module gitlab-ci-bootstrap
 
 go 1.24.0
 

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tfonji/gitlab-ci-bootstrap/internal/bootstrap"
+	"gitlab-ci-bootstrap/internal/bootstrap"
 )
 
 const (
@@ -61,7 +61,7 @@ func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
 	}
 
 	t.println(t.paint(ansiBold, "Files"))
-	create, update, unchanged := 0, 0, 0
+	create, update, unchanged, manual := 0, 0, 0, 0
 	for _, f := range plan.Files {
 		symbol, color := fileSymbolColor(f.Action)
 		t.println(fmt.Sprintf("  %s %s — %s", t.paint(color, symbol), f.TargetPath, f.Description))
@@ -70,13 +70,15 @@ func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
 			create++
 		case "update":
 			update++
+		case "skipped":
+			manual++
 		default:
 			unchanged++
 		}
 	}
 	t.rule()
-	t.println(fmt.Sprintf("%s — %d create, %d update, %d unchanged (no changes made)",
-		t.paint(ansiBold+ansiBlue, "~ Plan complete"), create, update, unchanged))
+	t.println(fmt.Sprintf("%s — %d create, %d update, %d unchanged, %d need a manual edit (no changes made)",
+		t.paint(ansiBold+ansiBlue, "~ Plan complete"), create, update, unchanged, manual))
 	t.println("")
 }
 
@@ -114,7 +116,7 @@ func (t *Terminal) WritePlanSummary(plans []*bootstrap.Plan) {
 		}
 		changes := 0
 		for _, f := range p.Files {
-			if f.Action != "unchanged" {
+			if f.Action == "create" || f.Action == "update" {
 				changes++
 			}
 		}
@@ -166,6 +168,9 @@ func (t *Terminal) header(title string, plan *bootstrap.Plan) {
 	}
 	t.println(fmt.Sprintf("%s %s", t.paint(ansiBold, "Project: "), project))
 	t.println(fmt.Sprintf("%s %s", t.paint(ansiBold, "Template:"), plan.Template))
+	if plan.Version != "" {
+		t.println(fmt.Sprintf("%s %s (%s)", t.paint(ansiBold, "Version: "), plan.Version, plan.VersionReason))
+	}
 	if plan.Branch != "" {
 		t.println(fmt.Sprintf("%s %s → %s", t.paint(ansiBold, "Branch:  "), plan.Branch, plan.BaseBranch))
 	}
@@ -178,6 +183,8 @@ func fileSymbolColor(action string) (symbol, color string) {
 		return "+", ansiGreen
 	case "update":
 		return "~", ansiYellow
+	case "skipped":
+		return "!", ansiYellow
 	default:
 		return "·", ansiDim
 	}

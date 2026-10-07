@@ -28,8 +28,9 @@ import (
 
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 
-	"github.com/tfonji/gitlab-ci-bootstrap/internal/config"
-	"github.com/tfonji/gitlab-ci-bootstrap/internal/gitlabclient"
+	"gitlab-ci-bootstrap/internal/config"
+	"gitlab-ci-bootstrap/internal/gitlabclient"
+	"gitlab-ci-bootstrap/internal/version"
 )
 
 type Bootstrapper struct {
@@ -44,9 +45,15 @@ func New(c *gitlabclient.Client, templates *config.Templates) *Bootstrapper {
 // FileDiff is the outcome of comparing one bundle file against the
 // project's current default branch.
 type FileDiff struct {
-	TargetPath  string `json:"target_path"`
-	Action      string `json:"action"` // "create", "update", or "unchanged"
+	TargetPath string `json:"target_path"`
+	// Action is "create", "update", "unchanged", or "skipped" (an existing
+	// version file that has no literal version to rewrite -- needs a manual edit).
+	Action      string `json:"action"`
 	Description string `json:"description"`
+	// Edit marks an existing repo file (pom.xml, package.json, ...) whose
+	// version is rewritten in place, as opposed to a file generated from the
+	// template bundle.
+	Edit bool `json:"edit,omitempty"`
 }
 
 // Plan is the full set of file diffs for one project + template pick.
@@ -57,6 +64,11 @@ type Plan struct {
 	Branch      string     `json:"branch"`
 	BaseBranch  string     `json:"base_branch"`
 	Files       []FileDiff `json:"files"`
+	// LatestTag is the repo's most recent tag ("" if none); Version is what
+	// the version files are set to, derived from it (see version.Next).
+	LatestTag     string `json:"latest_tag,omitempty"`
+	Version       string `json:"version,omitempty"`
+	VersionReason string `json:"version_reason,omitempty"`
 	// Error is set instead of Files when planning this project failed (e.g.
 	// the project couldn't be resolved) -- a batch run records it and moves on
 	// so one bad project doesn't block the rest; Apply reports it as failed.
@@ -99,8 +111,15 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 		BaseBranch:  proj.DefaultBranch,
 	}
 
+	latest, err := b.latestTag(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("looking up latest tag: %w", err)
+	}
+	plan.LatestTag = latest
+	plan.Version, plan.VersionReason = version.Next(latest)
+
 	for _, f := range tmpl.Files {
-		desired, err := b.content(f)
+		desired, err := b.content(f, plan.Version)
 		if err != nil {
 			return nil, err
 		}
@@ -120,7 +139,95 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 			return nil, fmt.Errorf("checking %s: %w", f.TargetPath, err)
 		}
 	}
+
+	edits, err := b.planVersionEdits(ctx, plan, tmpl)
+	if err != nil {
+		return nil, err
+	}
+	plan.Files = append(plan.Files, edits...)
 	return plan, nil
+}
+
+// latestTag returns the name of the repo's most recent tag by commit date,
+// or "" when it has none.
+func (b *Bootstrapper) latestTag(ctx context.Context, projectID int64) (string, error) {
+	tags, _, err := b.Client.REST.Tags.ListTags(projectID, &gitlab.ListTagsOptions{
+		ListOptions: gitlab.ListOptions{PerPage: 1},
+		OrderBy:     gitlab.Ptr("updated"),
+		Sort:        gitlab.Ptr("desc"),
+	}, gitlab.WithContext(ctx))
+	if err != nil {
+		return "", err
+	}
+	if len(tags) == 0 {
+		return "", nil
+	}
+	return tags[0].Name, nil
+}
+
+// planVersionEdits finds the repo's existing version-carrying files (pom.xml,
+// package.json, .csproj, properties files, ...) on the default branch and
+// plans rewriting each to plan.Version. Files a template bundles itself
+// (version.txt, .bumpversion.cfg, ...) are handled in content(), not here.
+func (b *Bootstrapper) planVersionEdits(ctx context.Context, plan *Plan, tmpl *config.Template) ([]FileDiff, error) {
+	tree, err := b.listTree(ctx, plan.ProjectID)
+	if err != nil {
+		if isNotFound(err) { // empty repository
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing repository tree: %w", err)
+	}
+
+	bundled := map[string]bool{}
+	for _, f := range tmpl.Files {
+		bundled[f.TargetPath] = true
+	}
+	propertyFiles := templatePropertyFiles(tmpl)
+
+	var diffs []FileDiff
+	for _, node := range tree {
+		if node.Type != "blob" || bundled[node.Path] {
+			continue
+		}
+		edit := version.EditorFor(node.Path, propertyFiles)
+		if edit == nil {
+			continue
+		}
+		file, _, err := b.Client.REST.RepositoryFiles.GetFile(plan.ProjectID, node.Path, &gitlab.GetFileOptions{
+			Ref: gitlab.Ptr(plan.BaseBranch),
+		}, gitlab.WithContext(ctx))
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", node.Path, err)
+		}
+		content := decodedContent(file)
+		out, old, err := edit([]byte(content), plan.Version)
+		switch {
+		case err != nil:
+			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "skipped", Edit: true,
+				Description: "version not updated, set it by hand: " + err.Error()})
+		case string(out) == content:
+			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "unchanged", Edit: true,
+				Description: fmt.Sprintf("version already %s", plan.Version)})
+		default:
+			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "update", Edit: true,
+				Description: fmt.Sprintf("version %s → %s", old, plan.Version)})
+		}
+	}
+	return diffs, nil
+}
+
+// templatePropertyFiles returns the template's PROPERTY_FILE override(s), the
+// properties file(s) its pipeline reads the version from.
+func templatePropertyFiles(tmpl *config.Template) []string {
+	var paths []string
+	for _, f := range tmpl.Files {
+		for _, v := range f.ExtraVariables {
+			if v.Name == "PROPERTY_FILE" && v.Value != "" {
+				paths = append(paths, v.Value)
+			}
+		}
+	}
+	return paths
 }
 
 // Apply commits every non-unchanged file in the plan in a single commit
@@ -157,12 +264,24 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 
 	var actions []*gitlab.CommitActionOptions
 	for _, f := range plan.Files {
-		if f.Action == "unchanged" {
+		if f.Action == "unchanged" || f.Action == "skipped" {
 			continue
 		}
-		content, err := b.templateContentFor(plan.Template, f.TargetPath)
-		if err != nil {
-			return nil, err
+		var content string
+		if f.Edit {
+			edited, changed, err := b.editedContent(ctx, plan, f.TargetPath, checkRef)
+			if err != nil {
+				return nil, err
+			}
+			if !changed {
+				continue
+			}
+			content = edited
+		} else {
+			content, err = b.templateContentFor(plan.Template, f.TargetPath, plan.Version)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		action := gitlab.FileUpdate
@@ -203,7 +322,7 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 		TargetBranch:       gitlab.Ptr(plan.BaseBranch),
 		RemoveSourceBranch: gitlab.Ptr(true),
 	}
-	if desc := mrDescription(b.Templates.Find(plan.Template)); desc != "" {
+	if desc := mrDescription(b.Templates.Find(plan.Template), plan); desc != "" {
 		mrOpts.Description = gitlab.Ptr(desc)
 	}
 
@@ -218,13 +337,35 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	return result, nil
 }
 
+// editedContent re-reads an in-place version file from ref (the MR branch if
+// it already exists, so a re-run doesn't undo or double-apply an earlier
+// attempt) and returns it rewritten to plan.Version.
+func (b *Bootstrapper) editedContent(ctx context.Context, plan *Plan, filePath, ref string) (content string, changed bool, err error) {
+	file, _, err := b.Client.REST.RepositoryFiles.GetFile(plan.ProjectID, filePath, &gitlab.GetFileOptions{
+		Ref: gitlab.Ptr(ref),
+	}, gitlab.WithContext(ctx))
+	if err != nil {
+		return "", false, fmt.Errorf("reading %s: %w", filePath, err)
+	}
+	current := decodedContent(file)
+	edit := version.EditorFor(filePath, templatePropertyFiles(b.Templates.Find(plan.Template)))
+	if edit == nil {
+		return "", false, fmt.Errorf("no version editor for %s", filePath)
+	}
+	out, _, err := edit([]byte(current), plan.Version)
+	if err != nil {
+		return "", false, fmt.Errorf("setting version in %s: %w", filePath, err)
+	}
+	return string(out), string(out) != current, nil
+}
+
 // mrDescription renders a template's MRChecklist (if any) as a checklist
 // for the MR body -- these are CI/CD variables this tool has no value for
 // (per-project app config, per-environment secrets/hosts), so the best it
 // can do is remind whoever reviews the MR to configure them by hand. Every
 // template gets a standing reminder to set the project's CMDB ID Topic,
 // regardless of whether it has a checklist.
-func mrDescription(tmpl *config.Template) string {
+func mrDescription(tmpl *config.Template, plan *Plan) string {
 	var b strings.Builder
 	b.WriteString("This MR adds the CI/CD template files. The following still need to be " +
 		"configured manually in this project's CI/CD settings -- this tool has no way " +
@@ -232,6 +373,8 @@ func mrDescription(tmpl *config.Template) string {
 
 	b.WriteString("\n## Project settings\n\n" +
 		"- [ ] Add this application's CMDB ID as a Topic on the project (Settings > General > Topics).\n")
+
+	writeVersionSection(&b, plan)
 
 	if tmpl == nil || tmpl.MRChecklist == nil {
 		return b.String()
@@ -276,15 +419,48 @@ func mrDescription(tmpl *config.Template) string {
 	return b.String()
 }
 
+// writeVersionSection tells the reviewer what version was written where and
+// lists the version files that need a manual edit.
+func writeVersionSection(b *strings.Builder, plan *Plan) {
+	if plan == nil || plan.Version == "" {
+		return
+	}
+	var updated, manual []string
+	for _, f := range plan.Files {
+		switch {
+		case f.Action == "skipped":
+			manual = append(manual, fmt.Sprintf("- [ ] Set the version to `%s` by hand in `%s` -- %s\n", plan.Version, f.TargetPath, strings.TrimPrefix(f.Description, "version not updated, set it by hand: ")))
+		case f.Action != "unchanged" && (f.Edit || version.Bundled(f.TargetPath) != nil):
+			updated = append(updated, "`"+f.TargetPath+"`")
+		}
+	}
+	b.WriteString("\n## Version\n\n")
+	fmt.Fprintf(b, "- [ ] Version set to `%s` (%s)", plan.Version, plan.VersionReason)
+	if len(updated) > 0 {
+		fmt.Fprintf(b, " in %s", strings.Join(updated, ", "))
+	}
+	b.WriteString(". Confirm this is the intended version.\n")
+	for _, m := range manual {
+		b.WriteString(m)
+	}
+}
+
 // content resolves one bundle file's desired content, per FileSpec.Source:
 // a local file is read verbatim; an include-sourced file's "content" is a
 // short generated `include:project` stub -- no network call, since nothing
 // is fetched from the shared templates project, only referenced.
-func (b *Bootstrapper) content(f config.FileSpec) (string, error) {
+func (b *Bootstrapper) content(f config.FileSpec, ver string) (string, error) {
 	if f.IsLocal() {
 		data, err := os.ReadFile(f.SourcePath)
 		if err != nil {
 			return "", fmt.Errorf("reading local file %s: %w", f.SourcePath, err)
+		}
+		if edit := version.Bundled(f.TargetPath); edit != nil && ver != "" {
+			out, _, err := edit(data, ver)
+			if err != nil {
+				return "", fmt.Errorf("setting version in bundled file %s: %w", f.SourcePath, err)
+			}
+			data = out
 		}
 		return string(data), nil
 	}
@@ -357,14 +533,14 @@ func includeStub(remote config.RemoteSource, file string, extra []config.ExtraVa
 	return b.String()
 }
 
-func (b *Bootstrapper) templateContentFor(templateName, targetPath string) (string, error) {
+func (b *Bootstrapper) templateContentFor(templateName, targetPath, ver string) (string, error) {
 	tmpl := b.Templates.Find(templateName)
 	if tmpl == nil {
 		return "", fmt.Errorf("unknown template %q", templateName)
 	}
 	for _, f := range tmpl.Files {
 		if f.TargetPath == targetPath {
-			return b.content(f)
+			return b.content(f, ver)
 		}
 	}
 	return "", fmt.Errorf("template %q has no file spec for target %q", templateName, targetPath)
