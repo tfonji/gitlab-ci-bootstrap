@@ -54,6 +54,12 @@ func UseColor(f *os.File) bool {
 func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
 	t.header("GITLAB CI BOOTSTRAP PLAN", plan)
 
+	if plan.Error != "" {
+		t.println(t.paint(ansiBold+ansiRed, "✗ Plan failed") + " — " + t.paint(ansiRed, plan.Error))
+		t.println("")
+		return
+	}
+
 	t.println(t.paint(ansiBold, "Files"))
 	create, update, unchanged := 0, 0, 0
 	for _, f := range plan.Files {
@@ -95,13 +101,74 @@ func (t *Terminal) WriteResult(plan *bootstrap.Plan, result *bootstrap.Result) {
 	t.println("")
 }
 
+// WritePlanSummary prints one line per project after a multi-project plan.
+func (t *Terminal) WritePlanSummary(plans []*bootstrap.Plan) {
+	t.println(t.paint(ansiBold+ansiCyan, fmt.Sprintf("BATCH PLAN SUMMARY (%d projects)", len(plans))))
+	t.rule()
+	failed := 0
+	for _, p := range plans {
+		if p.Error != "" {
+			failed++
+			t.println(fmt.Sprintf("%s %s — %s", t.paint(ansiRed, "✗"), p.ProjectPath, t.paint(ansiRed, p.Error)))
+			continue
+		}
+		changes := 0
+		for _, f := range p.Files {
+			if f.Action != "unchanged" {
+				changes++
+			}
+		}
+		symbol, color := "+", ansiGreen
+		if changes == 0 {
+			symbol, color = "·", ansiDim
+		}
+		t.println(fmt.Sprintf("%s %s — %d file(s) to change", t.paint(color, symbol), p.ProjectPath, changes))
+	}
+	t.rule()
+	t.println(fmt.Sprintf("%d planned, %d failed", len(plans)-failed, failed))
+	t.println("")
+}
+
+// WriteApplySummary prints one line per project after a multi-project apply,
+// with each merge request URL listed together so they're all in one place.
+func (t *Terminal) WriteApplySummary(results []*bootstrap.Result) {
+	t.println(t.paint(ansiBold+ansiCyan, fmt.Sprintf("BATCH APPLY SUMMARY (%d projects)", len(results))))
+	t.rule()
+	counts := map[string]int{}
+	for _, r := range results {
+		counts[r.Status]++
+		switch r.Status {
+		case "applied":
+			t.println(fmt.Sprintf("%s %s — %s", t.paint(ansiGreen, "✓"), r.ProjectPath, t.paint(ansiCyan, r.MRURL)))
+		case "failed":
+			t.println(fmt.Sprintf("%s %s — %s", t.paint(ansiRed, "✗"), r.ProjectPath, t.paint(ansiRed, r.Error)))
+		default:
+			line := fmt.Sprintf("%s %s — %s", t.paint(ansiDim, "·"), r.ProjectPath, r.Description)
+			if r.MRURL != "" {
+				line += " " + t.paint(ansiCyan, r.MRURL)
+			}
+			t.println(line)
+		}
+	}
+	t.rule()
+	t.println(fmt.Sprintf("%d applied, %d skipped/unchanged, %d failed",
+		counts["applied"], len(results)-counts["applied"]-counts["failed"], counts["failed"]))
+	t.println("")
+}
+
 func (t *Terminal) header(title string, plan *bootstrap.Plan) {
 	t.println("")
 	t.println(t.paint(ansiBold+ansiCyan, title))
 	t.rule()
-	t.println(fmt.Sprintf("%s %s (id %d)", t.paint(ansiBold, "Project: "), plan.ProjectPath, plan.ProjectID))
+	project := plan.ProjectPath
+	if plan.ProjectID != 0 {
+		project = fmt.Sprintf("%s (id %d)", plan.ProjectPath, plan.ProjectID)
+	}
+	t.println(fmt.Sprintf("%s %s", t.paint(ansiBold, "Project: "), project))
 	t.println(fmt.Sprintf("%s %s", t.paint(ansiBold, "Template:"), plan.Template))
-	t.println(fmt.Sprintf("%s %s → %s", t.paint(ansiBold, "Branch:  "), plan.Branch, plan.BaseBranch))
+	if plan.Branch != "" {
+		t.println(fmt.Sprintf("%s %s → %s", t.paint(ansiBold, "Branch:  "), plan.Branch, plan.BaseBranch))
+	}
 	t.rule()
 }
 

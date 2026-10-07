@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 
@@ -110,34 +111,59 @@ func runPlan(args []string) error {
 	gitlabURL := fs.String("gitlab-url", envOr("CI_SERVER_URL", "https://gitlab.com"), "GitLab base URL")
 	token := fs.String("token", os.Getenv("GITLAB_TOKEN"), "GitLab API token")
 	templatesFile := fs.String("templates", "configs/templates.yaml", "templates config file")
-	project := fs.String("project", os.Getenv("PROJECT_ID"), "target project ID or path")
+	project := fs.String("project", os.Getenv("PROJECT_ID"), "target project ID or path; comma-separate several to apply the same template to each")
 	template := fs.String("template", os.Getenv("TEMPLATE_NAME"), "template name (see list-templates)")
 	out := fs.String("out", "plan.json", "output plan file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *project == "" {
-		return fmt.Errorf("--project is required")
-	}
 	if *template == "" {
 		return fmt.Errorf("--template is required")
+	}
+
+	refs := splitProjects(*project)
+	if len(refs) == 0 {
+		return fmt.Errorf("--project is required")
 	}
 
 	b, err := newBootstrapper(*gitlabURL, *token, *templatesFile)
 	if err != nil {
 		return err
 	}
-	projectID, err := resolveProjectID(context.Background(), b, *project)
-	if err != nil {
-		return err
-	}
 
-	plan, err := b.Plan(context.Background(), projectID, *template)
-	if err != nil {
+	ctx := context.Background()
+	term := terminal()
+	plans := make([]*bootstrap.Plan, 0, len(refs))
+	failed := 0
+	for _, ref := range refs {
+		plan, err := planProject(ctx, b, ref, *template)
+		if err != nil {
+			plan = &bootstrap.Plan{ProjectPath: ref, Template: *template, Error: err.Error()}
+			failed++
+		}
+		term.WritePlan(plan)
+		plans = append(plans, plan)
+	}
+	if len(plans) > 1 {
+		term.WritePlanSummary(plans)
+	}
+	if err := writeJSON(*out, plans); err != nil {
 		return err
 	}
-	terminal().WritePlan(plan)
-	return writeJSON(*out, plan)
+	// A partial failure is recorded in the plan file and reported by apply;
+	// only fail the job when there is nothing at all to apply.
+	if failed == len(plans) {
+		return fmt.Errorf("planning failed for every project")
+	}
+	return nil
+}
+
+func planProject(ctx context.Context, b *bootstrap.Bootstrapper, ref, template string) (*bootstrap.Plan, error) {
+	projectID, err := resolveProjectID(ctx, b, ref)
+	if err != nil {
+		return nil, err
+	}
+	return b.Plan(ctx, projectID, template)
 }
 
 func runApply(args []string) error {
@@ -160,23 +186,66 @@ func runApply(args []string) error {
 	if err != nil {
 		return fmt.Errorf("reading plan file %s: %w", *planFile, err)
 	}
-	var plan bootstrap.Plan
-	if err := json.Unmarshal(data, &plan); err != nil {
+	var plans []*bootstrap.Plan
+	if err := json.Unmarshal(data, &plans); err != nil {
 		return fmt.Errorf("decoding plan file %s: %w", *planFile, err)
 	}
 
-	result, err := b.Apply(context.Background(), &plan)
-	if err != nil {
+	ctx := context.Background()
+	term := terminal()
+	results := make([]*bootstrap.Result, 0, len(plans))
+	failed := 0
+	for _, plan := range plans {
+		result := applyProject(ctx, b, plan)
+		if result.Status == "failed" {
+			failed++
+		}
+		term.WriteResult(plan, result)
+		results = append(results, result)
+	}
+	if len(results) > 1 {
+		term.WriteApplySummary(results)
+	}
+	if err := writeJSON(*out, results); err != nil {
 		return err
 	}
-	terminal().WriteResult(&plan, result)
-	if err := writeJSON(*out, result); err != nil {
-		return err
-	}
-	if result.Status == "failed" {
-		return fmt.Errorf("%s", result.Error)
+	if failed > 0 {
+		return fmt.Errorf("%d of %d project(s) failed", failed, len(results))
 	}
 	return nil
+}
+
+// applyProject never returns an error: a failure becomes a "failed" Result so
+// the remaining projects in a batch still get applied.
+func applyProject(ctx context.Context, b *bootstrap.Bootstrapper, plan *bootstrap.Plan) *bootstrap.Result {
+	failure := func(msg string) *bootstrap.Result {
+		return &bootstrap.Result{ProjectID: plan.ProjectID, ProjectPath: plan.ProjectPath, Template: plan.Template,
+			Status: "failed", Description: "could not apply", Error: msg}
+	}
+	if plan.Error != "" {
+		return failure("planning failed: " + plan.Error)
+	}
+	result, err := b.Apply(ctx, plan)
+	if err != nil {
+		return failure(err.Error())
+	}
+	return result
+}
+
+// splitProjects parses a comma-separated project list, dropping blanks and
+// duplicates while keeping order.
+func splitProjects(s string) []string {
+	var refs []string
+	seen := map[string]bool{}
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		refs = append(refs, p)
+	}
+	return refs
 }
 
 func runListTemplates(args []string) error {

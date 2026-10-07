@@ -8,7 +8,7 @@ workflow:
 
 variables:
   PROJECT_ID:
-    description: "Target project: numeric ID or path_with_namespace."
+    description: "Target project(s): numeric ID or path_with_namespace. Comma-separate several (e.g. 123,456,group/proj) to apply the same template to each."
     value: ""
   TEMPLATE_NAME:
     description: "CI/CD template to add. Run the 'suggest' job first if unsure -- check its log for a hint before picking here."
@@ -60,6 +60,7 @@ plan:
 apply:
   stage: apply
   when: manual
+  allow_failure: true
   needs: ["plan"]
   script:
     - ./bin/gitlab-ci-bootstrap-linux-amd64 apply --plan=plan.json --templates="$TEMPLATES_FILE" --out=result.json

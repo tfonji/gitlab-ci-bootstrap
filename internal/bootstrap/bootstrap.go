@@ -57,6 +57,10 @@ type Plan struct {
 	Branch      string     `json:"branch"`
 	BaseBranch  string     `json:"base_branch"`
 	Files       []FileDiff `json:"files"`
+	// Error is set instead of Files when planning this project failed (e.g.
+	// the project couldn't be resolved) -- a batch run records it and moves on
+	// so one bad project doesn't block the rest; Apply reports it as failed.
+	Error string `json:"error,omitempty"`
 }
 
 // Result is the outcome of Apply.
