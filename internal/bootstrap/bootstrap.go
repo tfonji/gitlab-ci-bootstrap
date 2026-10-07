@@ -230,37 +230,19 @@ func templatePropertyFiles(tmpl *config.Template) []string {
 	return paths
 }
 
-// Apply commits every non-unchanged file in the plan in a single commit
-// (creating the branch from BaseBranch if it doesn't exist yet) and opens
-// one MR. Idempotent: an already-open MR from the plan's branch is treated
-// as "already done," and file actions are re-checked against the branch's
-// current state (not just the plan) so re-running after a partial failure
-// doesn't try to re-create a file that a previous attempt already added.
+// Apply commits every non-unchanged file in the plan in a single commit on a
+// fresh branch cut from BaseBranch, and opens one MR. A previous attempt's
+// leftovers are cleared first (see replacePreviousAttempt): any open/closed MR
+// from the plan's branch is deleted and so is the branch itself, so each run
+// starts clean instead of stacking on top of an old branch. Nothing is deleted
+// when there is nothing to commit.
 func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	result := &Result{ProjectID: plan.ProjectID, ProjectPath: plan.ProjectPath, Template: plan.Template}
 
-	openMRs, _, err := b.Client.REST.MergeRequests.ListProjectMergeRequests(plan.ProjectID, &gitlab.ListProjectMergeRequestsOptions{
-		SourceBranch: gitlab.Ptr(plan.Branch),
-		State:        gitlab.Ptr("opened"),
-	}, gitlab.WithContext(ctx))
-	if err != nil {
-		return nil, fmt.Errorf("checking for existing MR: %w", err)
-	}
-	if len(openMRs) > 0 {
-		result.Status = "skipped"
-		result.Description = fmt.Sprintf("MR !%d already open", openMRs[0].IID)
-		result.MRURL = openMRs[0].WebURL
-		return result, nil
-	}
-
-	branchExists := true
-	if _, _, err := b.Client.REST.Branches.GetBranch(plan.ProjectID, plan.Branch, gitlab.WithContext(ctx)); err != nil {
-		branchExists = false
-	}
+	// The branch is recreated from BaseBranch, so every file is checked
+	// against BaseBranch, never the old branch's contents.
 	checkRef := plan.BaseBranch
-	if branchExists {
-		checkRef = plan.Branch
-	}
+	var err error
 
 	var actions []*gitlab.CommitActionOptions
 	for _, f := range plan.Files {
@@ -304,13 +286,16 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 		return result, nil
 	}
 
+	replaced, err := b.replacePreviousAttempt(ctx, plan)
+	if err != nil {
+		return nil, err
+	}
+
 	commitOpts := &gitlab.CreateCommitOptions{
 		Branch:        gitlab.Ptr(plan.Branch),
+		StartBranch:   gitlab.Ptr(plan.BaseBranch),
 		CommitMessage: gitlab.Ptr(fmt.Sprintf("Add %s CI/CD template", plan.Template)),
 		Actions:       actions,
-	}
-	if !branchExists {
-		commitOpts.StartBranch = gitlab.Ptr(plan.BaseBranch)
 	}
 	if _, _, err := b.Client.REST.Commits.CreateCommit(plan.ProjectID, commitOpts, gitlab.WithContext(ctx)); err != nil {
 		return nil, fmt.Errorf("committing template files: %w", err)
@@ -333,13 +318,58 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 
 	result.Status = "applied"
 	result.Description = fmt.Sprintf("opened MR !%d with %d file(s)", mr.IID, len(actions))
+	if replaced != "" {
+		result.Description += "; replaced previous attempt (" + replaced + ")"
+	}
 	result.MRURL = mr.WebURL
 	return result, nil
 }
 
-// editedContent re-reads an in-place version file from ref (the MR branch if
-// it already exists, so a re-run doesn't undo or double-apply an earlier
-// attempt) and returns it rewritten to plan.Version.
+// replacePreviousAttempt deletes the plan branch's open and closed MRs and
+// then the branch itself, returning a short summary of what was removed ("" if
+// nothing existed). Merged MRs are left alone -- they're real history. If an
+// MR can't be deleted (that needs admin or project owner), it is closed
+// instead, which is enough to free the branch.
+func (b *Bootstrapper) replacePreviousAttempt(ctx context.Context, plan *Plan) (string, error) {
+	mrs, _, err := b.Client.REST.MergeRequests.ListProjectMergeRequests(plan.ProjectID, &gitlab.ListProjectMergeRequestsOptions{
+		SourceBranch: gitlab.Ptr(plan.Branch),
+		State:        gitlab.Ptr("all"),
+	}, gitlab.WithContext(ctx))
+	if err != nil {
+		return "", fmt.Errorf("checking for existing MRs from %s: %w", plan.Branch, err)
+	}
+
+	var removed []string
+	for _, mr := range mrs {
+		if mr.State == "merged" {
+			continue
+		}
+		if _, err := b.Client.REST.MergeRequests.DeleteMergeRequest(plan.ProjectID, mr.IID, gitlab.WithContext(ctx)); err != nil {
+			_, _, closeErr := b.Client.REST.MergeRequests.UpdateMergeRequest(plan.ProjectID, mr.IID, &gitlab.UpdateMergeRequestOptions{
+				StateEvent: gitlab.Ptr("close"),
+			}, gitlab.WithContext(ctx))
+			if closeErr != nil {
+				return "", fmt.Errorf("removing existing MR !%d (delete: %v; close: %w)", mr.IID, err, closeErr)
+			}
+			removed = append(removed, fmt.Sprintf("closed MR !%d", mr.IID))
+			continue
+		}
+		removed = append(removed, fmt.Sprintf("deleted MR !%d", mr.IID))
+	}
+
+	if _, _, err := b.Client.REST.Branches.GetBranch(plan.ProjectID, plan.Branch, gitlab.WithContext(ctx)); err == nil {
+		if _, err := b.Client.REST.Branches.DeleteBranch(plan.ProjectID, plan.Branch, gitlab.WithContext(ctx)); err != nil {
+			return "", fmt.Errorf("deleting existing branch %s: %w", plan.Branch, err)
+		}
+		removed = append(removed, "deleted branch "+plan.Branch)
+	} else if !isNotFound(err) {
+		return "", fmt.Errorf("checking for existing branch %s: %w", plan.Branch, err)
+	}
+	return strings.Join(removed, ", "), nil
+}
+
+// editedContent re-reads an in-place version file from ref (the base branch)
+// and returns it rewritten to plan.Version.
 func (b *Bootstrapper) editedContent(ctx context.Context, plan *Plan, filePath, ref string) (content string, changed bool, err error) {
 	file, _, err := b.Client.REST.RepositoryFiles.GetFile(plan.ProjectID, filePath, &gitlab.GetFileOptions{
 		Ref: gitlab.Ptr(ref),

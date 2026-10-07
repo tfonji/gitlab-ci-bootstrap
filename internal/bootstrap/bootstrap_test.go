@@ -22,10 +22,21 @@ type fakeGitLab struct {
 	tags  []string // most recent first
 	files map[string]string
 
-	mu      sync.Mutex
-	commit  map[string]any
-	mrBody  map[string]any
-	mrCount int
+	// Leftovers from a previous attempt, and what happens when they're removed.
+	branchExists bool
+	existingMRs  []map[string]any // each: iid, state
+	denyMRDelete bool
+	calls        []string // ordered record of every mutating call
+	mu           sync.Mutex
+	commit       map[string]any
+	mrBody       map[string]any
+	mrCount      int
+}
+
+func (f *fakeGitLab) record(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, call)
 }
 
 func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -61,19 +72,43 @@ func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(map[string]any{"file_path": path, "encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(content))})
 	case p == "/merge_requests" && r.Method == http.MethodGet:
-		writeJSON([]any{})
-	case strings.HasPrefix(p, "/repository/branches/"):
-		http.NotFound(w, r)
+		mrs := []map[string]any{}
+		for _, mr := range f.existingMRs {
+			mrs = append(mrs, map[string]any{"iid": mr["iid"], "state": mr["state"], "source_branch": r.URL.Query().Get("source_branch")})
+		}
+		writeJSON(mrs)
+	case strings.HasPrefix(p, "/merge_requests/") && r.Method == http.MethodDelete:
+		iid := strings.TrimPrefix(p, "/merge_requests/")
+		if f.denyMRDelete {
+			http.Error(w, `{"message":"403 Forbidden"}`, http.StatusForbidden)
+			return
+		}
+		f.record("delete-mr " + iid)
+		w.WriteHeader(http.StatusNoContent)
+	case strings.HasPrefix(p, "/merge_requests/") && r.Method == http.MethodPut:
+		f.record("close-mr " + strings.TrimPrefix(p, "/merge_requests/"))
+		writeJSON(map[string]any{"iid": 1, "state": "closed"})
+	case strings.HasPrefix(p, "/repository/branches/") && r.Method == http.MethodGet:
+		if !f.branchExists {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(map[string]any{"name": strings.TrimPrefix(p, "/repository/branches/")})
+	case strings.HasPrefix(p, "/repository/branches/") && r.Method == http.MethodDelete:
+		f.record("delete-branch")
+		w.WriteHeader(http.StatusNoContent)
 	case p == "/repository/commits" && r.Method == http.MethodPost:
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		_ = json.NewDecoder(r.Body).Decode(&f.commit)
+		f.calls = append(f.calls, "commit")
 		writeJSON(map[string]any{"id": "abc"})
 	case p == "/merge_requests" && r.Method == http.MethodPost:
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		_ = json.NewDecoder(r.Body).Decode(&f.mrBody)
 		f.mrCount++
+		f.calls = append(f.calls, "create-mr")
 		writeJSON(map[string]any{"iid": 3, "web_url": "https://gitlab.example.com/acme/app/-/merge_requests/3"})
 	default:
 		http.NotFound(w, r)
@@ -215,5 +250,87 @@ func TestApplyWritesVersionAndExplainsInMR(t *testing.T) {
 		if !strings.Contains(desc, want) {
 			t.Errorf("MR description missing %q:\n%s", want, desc)
 		}
+	}
+}
+
+func newApplyFixture(t *testing.T, fake *fakeGitLab) (*Bootstrapper, *Plan) {
+	t.Helper()
+	b := newTestBootstrapper(t, fake)
+	plan, err := b.Plan(context.Background(), 7, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b, plan
+}
+
+func TestApplyReplacesPreviousAttempt(t *testing.T) {
+	fake := &fakeGitLab{
+		tags:         []string{"1.0.0"},
+		files:        map[string]string{"pom.xml": "<project><version>0.0.1</version></project>"},
+		branchExists: true,
+		existingMRs: []map[string]any{
+			{"iid": 4, "state": "opened"},
+			{"iid": 5, "state": "closed"},
+			{"iid": 6, "state": "merged"},
+		},
+	}
+	b, plan := newApplyFixture(t, fake)
+	result, err := b.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "delete-mr 4, delete-mr 5, delete-branch, commit, create-mr"
+	if got := strings.Join(fake.calls, ", "); got != want {
+		t.Errorf("call order = %q, want %q (merged MR !6 must be left alone)", got, want)
+	}
+	if fake.commit["start_branch"] != "main" {
+		t.Errorf("branch must be recreated from the base branch, start_branch = %v", fake.commit["start_branch"])
+	}
+	if result.Status != "applied" || !strings.Contains(result.Description, "deleted MR !4, deleted MR !5, deleted branch feature/add-demo") {
+		t.Errorf("result = %+v", result)
+	}
+}
+
+func TestApplyClosesMRWhenDeleteIsForbidden(t *testing.T) {
+	fake := &fakeGitLab{
+		tags:         []string{"1.0.0"},
+		files:        map[string]string{},
+		branchExists: true,
+		existingMRs:  []map[string]any{{"iid": 4, "state": "opened"}},
+		denyMRDelete: true,
+	}
+	b, plan := newApplyFixture(t, fake)
+	result, err := b.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(fake.calls, ", "); got != "close-mr 4, delete-branch, commit, create-mr" {
+		t.Errorf("call order = %q", got)
+	}
+	if !strings.Contains(result.Description, "closed MR !4") {
+		t.Errorf("result = %+v", result)
+	}
+}
+
+func TestApplyWithNothingToCommitDeletesNothing(t *testing.T) {
+	// version.txt already matches the template output, and there is no
+	// .gitlab-ci.yml diff -- so no commit is needed and the old branch/MR stay.
+	fake := &fakeGitLab{
+		tags:         []string{"1.0.0"},
+		files:        map[string]string{".gitlab-ci.yml": "", "version.txt": "version: 1.0.1\n"},
+		branchExists: true,
+		existingMRs:  []map[string]any{{"iid": 4, "state": "opened"}},
+	}
+	b, plan := newApplyFixture(t, fake)
+	for i := range plan.Files {
+		plan.Files[i].Action = "unchanged"
+	}
+	result, err := b.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "unchanged" || len(fake.calls) != 0 {
+		t.Errorf("status = %q, calls = %v; nothing should be deleted when there is nothing to commit", result.Status, fake.calls)
 	}
 }
