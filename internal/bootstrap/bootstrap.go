@@ -411,6 +411,7 @@ func mrDescription(tmpl *config.Template, plan *Plan) string {
 		checklist = tmpl.MRChecklist
 	}
 	writeGroupLevelSection(&b, checklist)
+	writeArtifactorySection(&b, tmpl)
 
 	if checklist == nil {
 		return b.String()
@@ -474,6 +475,31 @@ func writeGroupLevelSection(b *strings.Builder, checklist *config.MRChecklist) {
 			fmt.Fprintf(b, "- [ ] `%s`\n", v)
 		}
 	}
+}
+
+// artifactoryOnboardingURL is the Confluence page on onboarding a project to
+// Artifactory, linked from every MR for a template that has a CI component.
+const artifactoryOnboardingURL = "https://confluence.fcpd.fcbint.net/spaces/CONV/pages/42074241/Artifactory"
+
+// hasCIComponent reports whether a template builds/publishes artifacts, i.e.
+// "ci" is one of the dash-separated words in its name (java-maven-ci,
+// node-iis-ci-cd) -- unlike the CD-only templates (ansible-cd, flyway-cd,
+// terraform-cd), and unlike terraform-cli-cd, where "cli" isn't "ci".
+func hasCIComponent(templateName string) bool {
+	for _, word := range strings.Split(templateName, "-") {
+		if word == "ci" {
+			return true
+		}
+	}
+	return false
+}
+
+func writeArtifactorySection(b *strings.Builder, tmpl *config.Template) {
+	if tmpl == nil || !hasCIComponent(tmpl.Name) {
+		return
+	}
+	b.WriteString("\n## Artifactory\n\n")
+	fmt.Fprintf(b, "- [ ] Complete Artifactory onboarding for this project: %s\n", artifactoryOnboardingURL)
 }
 
 // writeVersionSection tells the reviewer what version was written where and

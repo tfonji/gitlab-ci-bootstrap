@@ -334,3 +334,25 @@ func TestApplyWithNothingToCommitDeletesNothing(t *testing.T) {
 		t.Errorf("status = %q, calls = %v; nothing should be deleted when there is nothing to commit", result.Status, fake.calls)
 	}
 }
+
+func TestMRDescriptionLinksArtifactoryOnboardingOnlyForCITemplates(t *testing.T) {
+	cases := map[string]bool{
+		"java-maven-ci":         true,
+		"node-iis-ci-cd":        true,
+		"dotnet-core-iis-ci-cd": true,
+		"python-ci":             true,
+		"ansible-cd":            false,
+		"flyway-cd":             false,
+		"terraform-cd":          false,
+		"terraform-cli-cd":      false,
+	}
+	for name, wantLink := range cases {
+		desc := mrDescription(&config.Template{Name: name}, nil)
+		if got := strings.Contains(desc, artifactoryOnboardingURL); got != wantLink {
+			t.Errorf("%s: onboarding link present = %v, want %v", name, got, wantLink)
+		}
+	}
+	if strings.Contains(mrDescription(nil, nil), artifactoryOnboardingURL) {
+		t.Error("no template means no CI component, so no Artifactory link")
+	}
+}
