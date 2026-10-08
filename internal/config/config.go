@@ -150,9 +150,11 @@ type ExtraVariable struct {
 	Options     []string `yaml:"options,omitempty"`
 
 	// From, when set, takes the value from what was detected in the target
-	// project instead of Value. Only "csproj" exists: the repo-relative path
-	// of the .csproj to version/build, or blank when it can't be determined
-	// (leaving the shared template to fall back to its own discovery).
+	// project instead of Value:
+	//   "csproj"   the repo-relative path of the .csproj to version/build
+	//   "solution" the file name of the .sln at the repo root (e.g. IBE.sln)
+	// It is blank when nothing could be determined, so the MR asks for it by
+	// hand (and, for csproj, the shared template falls back to its own discovery).
 	From string `yaml:"from,omitempty"`
 }
 
@@ -175,8 +177,24 @@ func (t *Template) ResolvesCsproj() bool {
 	return false
 }
 
-// FromCsproj is the ExtraVariable.From value that selects the detected .csproj.
-const FromCsproj = "csproj"
+// ExtraVariable.From values.
+const (
+	FromCsproj   = "csproj"
+	FromSolution = "solution"
+)
+
+// ResolvesSolution reports whether any variable takes its value from the
+// target project's solution file.
+func (t *Template) ResolvesSolution() bool {
+	for _, f := range t.Files {
+		for _, v := range f.ExtraVariables {
+			if v.From == FromSolution {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func (f FileSpec) IsLocal() bool {
 	return f.Source == SourceLocal

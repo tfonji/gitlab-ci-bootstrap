@@ -82,6 +82,10 @@ type Plan struct {
 	// the one being added (ApplicationNameAdded).
 	ApplicationName      string `json:"application_name,omitempty"`
 	ApplicationNameAdded bool   `json:"application_name_added,omitempty"`
+	// Solution is the file name of the .sln at the repo root, for templates
+	// with a `from: solution` variable; SolutionIssue says why none was chosen.
+	Solution      string `json:"solution,omitempty"`
+	SolutionIssue string `json:"solution_issue,omitempty"`
 	// Error is set instead of Files when planning this project failed (e.g.
 	// the project couldn't be resolved) -- a batch run records it and moves on
 	// so one bad project doesn't block the rest; Apply reports it as failed.
@@ -150,6 +154,12 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 			if !changed {
 				plan.ApplicationName = existing
 			}
+		}
+	}
+
+	if tmpl.ResolvesSolution() {
+		if plan.Solution, plan.SolutionIssue, err = b.resolveSolution(ctx, plan, tree); err != nil {
+			return nil, err
 		}
 	}
 
@@ -492,6 +502,7 @@ func mrDescription(tmpl *config.Template, plan *Plan) string {
 
 	writeVersionSection(&b, plan)
 	writeCsprojSection(&b, tmpl, plan)
+	writeSolutionSection(&b, tmpl, plan)
 
 	var checklist *config.MRChecklist
 	if tmpl != nil {
@@ -655,8 +666,11 @@ func (b *Bootstrapper) content(f config.FileSpec, plan *Plan) (string, error) {
 func resolveVariables(vars []config.ExtraVariable, plan *Plan) []config.ExtraVariable {
 	out := make([]config.ExtraVariable, len(vars))
 	for i, v := range vars {
-		if v.From == config.FromCsproj {
+		switch v.From {
+		case config.FromCsproj:
 			v.Value = plan.Csproj
+		case config.FromSolution:
+			v.Value = plan.Solution
 		}
 		out[i] = v
 	}

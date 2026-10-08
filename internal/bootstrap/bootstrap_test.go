@@ -173,7 +173,10 @@ func newTestBootstrapper(t *testing.T, fake *fakeGitLab) *Bootstrapper {
 			MRChecklist:           &config.MRChecklist{PerProject: []string{"ARTIFACT_NAME"}},
 			Files: []config.FileSpec{
 				{TargetPath: ".gitlab-ci.yml", SourcePath: "templates/dotnet.gitlab.yml",
-					ExtraVariables: []config.ExtraVariable{{Name: "version_file", From: config.FromCsproj}}},
+					ExtraVariables: []config.ExtraVariable{
+						{Name: "version_file", From: config.FromCsproj},
+						{Name: "SolutionName", From: config.FromSolution},
+					}},
 				{TargetPath: ".bumpversion.cfg", SourcePath: bumpCfg, Source: config.SourceLocal, CsprojPlaceholder: true},
 			},
 		}},
@@ -769,6 +772,77 @@ func TestSetApplicationName(t *testing.T) {
 		got, existing, changed := version.SetApplicationName([]byte(tc.in), "X")
 		if string(got) != tc.want || existing != tc.existing || changed != tc.changed {
 			t.Errorf("%s: got (%q, %q, %v), want (%q, %q, %v)", name, got, existing, changed, tc.want, tc.existing, tc.changed)
+		}
+	}
+}
+
+func TestPlanSetsSolutionNameFromTheRootSolution(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{
+		"IBE.sln":                "Microsoft Visual Studio Solution File",
+		"tools/Tools.sln":        "ignored: not at the root",
+		"IBE.Web/IBE.Web.csproj": webCsproj,
+	}}
+	b := newTestBootstrapper(t, fake)
+
+	plan, err := b.Plan(context.Background(), 7, "dotnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Solution != "IBE.sln" || plan.SolutionIssue != "" {
+		t.Fatalf("solution = %q (issue %q)", plan.Solution, plan.SolutionIssue)
+	}
+	stub, _ := b.templateContentFor(plan, ".gitlab-ci.yml")
+	if !strings.Contains(stub, `SolutionName: "IBE.sln"`) {
+		t.Errorf("stub should set SolutionName:\n%s", stub)
+	}
+	if desc := mrDescription(b.Templates.Find("dotnet"), plan); strings.Contains(desc, "## Solution file") {
+		t.Errorf("MR should not ask for the solution when it was found:\n%s", desc)
+	}
+}
+
+func TestPlanLeavesSolutionNameForTheMRWhenNotAtTheRoot(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{
+		"src/IBE.sln":                "x",
+		"src/IBE.Web/IBE.Web.csproj": webCsproj,
+	}}
+	b := newTestBootstrapper(t, fake)
+
+	plan, err := b.Plan(context.Background(), 7, "dotnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Solution != "" || !strings.Contains(plan.SolutionIssue, "`src/IBE.sln`") {
+		t.Fatalf("solution = %q, issue = %q", plan.Solution, plan.SolutionIssue)
+	}
+	stub, _ := b.templateContentFor(plan, ".gitlab-ci.yml")
+	if !strings.Contains(stub, `SolutionName: ""`) {
+		t.Errorf("SolutionName should be blank:\n%s", stub)
+	}
+	desc := mrDescription(b.Templates.Find("dotnet"), plan)
+	if !strings.Contains(desc, "## Solution file") || !strings.Contains(desc, "Set `SolutionName` in `.gitlab-ci.yml`") {
+		t.Errorf("MR should ask for SolutionName:\n%s", desc)
+	}
+}
+
+func TestPickSolution(t *testing.T) {
+	sln := func(name, content string) slnInfo { return slnInfo{Name: name, Content: content} }
+	for name, tc := range map[string]struct {
+		root      []slnInfo
+		nested    []string
+		csproj    string
+		want      string
+		wantIssue string
+	}{
+		"single at root":            {[]slnInfo{sln("A.sln", "")}, nil, "", "A.sln", ""},
+		"none":                      {nil, nil, "", "", "no solution file was found"},
+		"only nested":               {nil, []string{"src/A.sln"}, "", "", "found only `src/A.sln`"},
+		"tie broken by the csproj":  {[]slnInfo{sln("A.sln", `Project("{x}") = "W", "src\W\W.csproj"`), sln("B.sln", "")}, nil, "src/W/W.csproj", "A.sln", ""},
+		"tie, both list the csproj": {[]slnInfo{sln("A.sln", `src\W\W.csproj`), sln("B.sln", `src\W\W.csproj`)}, nil, "src/W/W.csproj", "", "several solution files"},
+		"tie, no csproj known":      {[]slnInfo{sln("A.sln", ""), sln("B.sln", "")}, nil, "", "", "`A.sln`, `B.sln`"},
+	} {
+		got, issue := pickSolution(tc.root, tc.nested, tc.csproj)
+		if got != tc.want || (tc.wantIssue == "") != (issue == "") || !strings.Contains(issue, tc.wantIssue) {
+			t.Errorf("%s: got (%q, %q), want (%q, issue containing %q)", name, got, issue, tc.want, tc.wantIssue)
 		}
 	}
 }

@@ -69,6 +69,9 @@ func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
 	if plan.CsprojIssue != "" {
 		t.println(t.paint(ansiYellow, "! .csproj not set") + " — " + plan.CsprojIssue + " (the MR asks for it by hand)")
 	}
+	if plan.SolutionIssue != "" {
+		t.println(t.paint(ansiYellow, "! solution not set") + " — " + plan.SolutionIssue + " (the MR asks for it by hand)")
+	}
 	t.println(t.paint(ansiBold, "Files"))
 	create, update, unchanged, manual := 0, 0, 0, 0
 	for _, f := range plan.Files {
@@ -190,6 +193,9 @@ func (t *Terminal) header(title string, plan *bootstrap.Plan) {
 	}
 	if plan.Csproj != "" {
 		t.println(fmt.Sprintf("%s %s", t.paint(ansiBold, ".csproj: "), plan.Csproj))
+	}
+	if plan.Solution != "" {
+		t.println(fmt.Sprintf("%s %s", t.paint(ansiBold, "Solution:"), plan.Solution))
 	}
 	if plan.Branch != "" {
 		t.println(fmt.Sprintf("%s %s → %s", t.paint(ansiBold, "Branch:  "), plan.Branch, plan.BaseBranch))

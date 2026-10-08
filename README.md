@@ -190,6 +190,16 @@ extra variable.
   template then falls back to its own discovery), and the MR gets a
   ".csproj path" checklist item naming the candidates.
 
+## Detecting the solution file
+
+`dotnet-framework-iis-ci-cd` sets `SolutionName` in the generated
+`.gitlab-ci.yml` (`from: solution`) to the file name of the `.sln` at the repo
+root, e.g. `SolutionName: "IBE.sln"`. Only the root counts, since the value is
+a bare file name. With several at the root, the one that lists the detected
+.csproj wins if exactly one does. Otherwise (none, only one in a subfolder, or
+a tie) `SolutionName` is written blank and the MR gets a "Solution file"
+checklist item naming what was found.
+
 ## Known gaps
 
 - Every file under `files/` still has `TODO` placeholders (mirror URLs,
