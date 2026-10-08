@@ -180,6 +180,11 @@ extra variable.
   or a `.Tests` name).
 - One project left: that one. Several: the single deployable one (web SDK,
   web project type, `Web.config` beside it, or an `Exe`/`WinExe` output).
+- For the IIS templates (`csproj_application_name: true`), the chosen
+  project also gets an `<ApplicationName>` (its file name without `.csproj`)
+  when it has none; an existing one is never changed. The pipeline names the
+  artifact after it, so the MR tells the reviewer to set `ARTIFACT_NAME` to the
+  same value.
 - Otherwise (none found, only tests, or several deployable) nothing is
   guessed: the placeholder stays, `version_file` stays blank (the shared
   template then falls back to its own discovery), and the MR gets a

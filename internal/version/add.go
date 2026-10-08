@@ -42,11 +42,11 @@ var (
 	projectOpen       = regexp.MustCompile(`(?is)<Project(\s[^>]*[^/>])?>`)
 )
 
-// addCsprojVersion adds <element>version</element> as the last child of the
+// addCsprojElement adds <element>value</element> as the last child of the
 // first PropertyGroup without a Condition, or in a new PropertyGroup at the top
 // of the project when it has none.
-func addCsprojVersion(content []byte, element, version string) ([]byte, bool) {
-	line := "<" + element + ">" + version + "</" + element + ">"
+func addCsprojElement(content []byte, element, value string) ([]byte, bool) {
+	line := "<" + element + ">" + value + "</" + element + ">"
 	for _, loc := range propertyGroupOpen.FindAllSubmatchIndex(content, -1) {
 		if loc[2] >= 0 && bytes.Contains(bytes.ToLower(content[loc[2]:loc[3]]), []byte("condition")) {
 			continue

@@ -187,7 +187,7 @@ func CsprojAdding(element string) Editor {
 		if !errors.Is(err, ErrAbsent) {
 			return out, old, err
 		}
-		added, ok := addCsprojVersion(content, element, version)
+		added, ok := addCsprojElement(content, element, version)
 		if !ok {
 			return nil, "", absent("%s and has no <PropertyGroup> to add one to", ErrNoVersion.Error())
 		}
@@ -430,4 +430,25 @@ func sectionBody(content []byte, start int) []byte {
 		off += end + 1
 	}
 	return rest
+}
+
+var csprojApplicationName = regexp.MustCompile(`(?i)(<ApplicationName>\s*)([^<]*?)(\s*</ApplicationName>)`)
+
+// SetApplicationName makes sure a .csproj has an <ApplicationName>, which the
+// IIS templates name the build artifact after. An existing non-empty value is
+// never touched: it is returned as existing with changed == false. A missing
+// or empty one is set to name.
+func SetApplicationName(content []byte, name string) (out []byte, existing string, changed bool) {
+	if loc := csprojApplicationName.FindSubmatchIndex(content); loc != nil {
+		if old := string(content[loc[4]:loc[5]]); old != "" {
+			return content, old, false
+		}
+		filled := append(append(append([]byte{}, content[:loc[4]]...), name...), content[loc[5]:]...)
+		return filled, "", true
+	}
+	added, ok := addCsprojElement(content, "ApplicationName", name)
+	if !ok {
+		return content, "", false
+	}
+	return added, "", true
 }

@@ -14,6 +14,7 @@ import (
 
 	"gitlab-ci-bootstrap/internal/config"
 	"gitlab-ci-bootstrap/internal/gitlabclient"
+	"gitlab-ci-bootstrap/internal/version"
 )
 
 // fakeGitLab serves just enough of the GitLab REST API for Plan and Apply:
@@ -166,8 +167,10 @@ func newTestBootstrapper(t *testing.T, fake *fakeGitLab) *Bootstrapper {
 				{TargetPath: "version.txt", SourcePath: versionTxt, Source: config.SourceLocal},
 			},
 		}, {
-			Name:                 "dotnet",
-			CsprojVersionElement: "version",
+			Name:                  "dotnet",
+			CsprojVersionElement:  "version",
+			CsprojApplicationName: true,
+			MRChecklist:           &config.MRChecklist{PerProject: []string{"ARTIFACT_NAME"}},
 			Files: []config.FileSpec{
 				{TargetPath: ".gitlab-ci.yml", SourcePath: "templates/dotnet.gitlab.yml",
 					ExtraVariables: []config.ExtraVariable{{Name: "version_file", From: config.FromCsproj}}},
@@ -553,8 +556,8 @@ func TestPlanDetectsCsprojAndFillsPlaceholderAndVariable(t *testing.T) {
 	}
 	var desc strings.Builder
 	writeCsprojSection(&desc, b.Templates.Find("dotnet"), plan)
-	if desc.Len() != 0 {
-		t.Errorf("MR should not ask for the csproj when it was detected:\n%s", desc.String())
+	if strings.Contains(desc.String(), "Replace `") || strings.Contains(desc.String(), "Set `version_file`") {
+		t.Errorf("MR should not ask for the csproj path when it was detected:\n%s", desc.String())
 	}
 	// The lowercase <version> element in the chosen project is still versioned.
 	if f := planFiles(plan)[want]; f.Action != "update" {
@@ -585,7 +588,7 @@ func TestPlanLeavesCsprojForTheMRWhenAmbiguous(t *testing.T) {
 		t.Errorf("placeholder should stay:\n%s", cfg)
 	}
 	desc := mrDescription(b.Templates.Find("dotnet"), plan)
-	for _, want := range []string{"## .csproj path", "Replace `" + CsprojPlaceholder + "` in `.bumpversion.cfg`", "Set `version_file` in `.gitlab-ci.yml`", "`Portal/Portal.csproj`"} {
+	for _, want := range []string{"## .csproj", "Replace `" + CsprojPlaceholder + "` in `.bumpversion.cfg`", "Set `version_file` in `.gitlab-ci.yml`", "`Portal/Portal.csproj`"} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("MR description missing %q:\n%s", want, desc)
 		}
@@ -672,11 +675,100 @@ func TestApplyAddsMissingVersionToCsprojUsingTheTemplatesSpelling(t *testing.T) 
 			got = m["content"].(string)
 		}
 	}
-	if want := "    <version>1.0.0</version>\n  </PropertyGroup>"; !strings.Contains(got, want) {
+	if want := "    <version>1.0.0</version>\n    <ApplicationName>App</ApplicationName>\n  </PropertyGroup>"; !strings.Contains(got, want) {
 		t.Errorf("csproj committed as %q, want it to contain %q", got, want)
 	}
 	desc, _ := fake.mrBody["description"].(string)
 	if !strings.Contains(desc, "added to `App/App.csproj`, which declared none") {
 		t.Errorf("MR should ask to confirm the added version:\n%s", desc)
+	}
+}
+
+func TestPlanSetsApplicationNameOnlyWhenTheCsprojHasNone(t *testing.T) {
+	withName := strings.Replace(webCsproj, "</PropertyGroup>", "<ApplicationName>Custom.Name</ApplicationName></PropertyGroup>", 1)
+	fake := &fakeGitLab{files: map[string]string{"Web/Web.csproj": withName}}
+	b := newTestBootstrapper(t, fake)
+
+	plan, err := b.Plan(context.Background(), 7, "dotnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ApplicationName != "Custom.Name" || plan.ApplicationNameAdded {
+		t.Errorf("existing ApplicationName must be kept: %q added=%v", plan.ApplicationName, plan.ApplicationNameAdded)
+	}
+	if f := planFiles(plan)["Web/Web.csproj"]; strings.Contains(f.Description, "ApplicationName") {
+		t.Errorf("plan should not mention ApplicationName: %+v", f)
+	}
+	desc := mrDescription(b.Templates.Find("dotnet"), plan)
+	if !strings.Contains(desc, "Confirm `<ApplicationName>Custom.Name</ApplicationName>` in `Web/Web.csproj`, and set `ARTIFACT_NAME` to `Custom.Name`.") {
+		t.Errorf("MR should tie ARTIFACT_NAME to the existing name:\n%s", desc)
+	}
+}
+
+func TestPlanAddsApplicationNameFromTheFileNameAndExplainsIt(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{"src/Orders.Api/Orders.Api.csproj": webCsproj}}
+	b := newTestBootstrapper(t, fake)
+
+	plan, err := b.Plan(context.Background(), 7, "dotnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ApplicationName != "Orders.Api" || !plan.ApplicationNameAdded {
+		t.Fatalf("application name = %q added=%v", plan.ApplicationName, plan.ApplicationNameAdded)
+	}
+	f := planFiles(plan)["src/Orders.Api/Orders.Api.csproj"]
+	if f.Action != "update" || !strings.Contains(f.Description, "will add <ApplicationName>Orders.Api</ApplicationName>") {
+		t.Errorf("plan: %+v", f)
+	}
+	desc := mrDescription(b.Templates.Find("dotnet"), plan)
+	if !strings.Contains(desc, "added to `src/Orders.Api/Orders.Api.csproj` (the file name), and set `ARTIFACT_NAME` to `Orders.Api`.") {
+		t.Errorf("MR should ask to confirm the name and set ARTIFACT_NAME:\n%s", desc)
+	}
+}
+
+func TestApplicationNameStillAddedWhenTheVersionCannotBeSet(t *testing.T) {
+	ref := strings.Replace(webCsproj, "<version>0.9.0</version>", "<version>$(Base)</version>", 1)
+	fake := &fakeGitLab{files: map[string]string{"App/App.csproj": ref}}
+	b := newTestBootstrapper(t, fake)
+
+	plan, err := b.Plan(context.Background(), 7, "dotnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := planFiles(plan)["App/App.csproj"]
+	if f.Action != "update" || f.Warning == "" {
+		t.Fatalf("expected an update carrying a warning for the version: %+v", f)
+	}
+	if _, err := b.Apply(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	for _, a := range fake.commit["actions"].([]any) {
+		if m := a.(map[string]any); m["file_path"] == "App/App.csproj" {
+			got = m["content"].(string)
+		}
+	}
+	if !strings.Contains(got, "<ApplicationName>App</ApplicationName>") || !strings.Contains(got, "$(Base)") {
+		t.Errorf("csproj committed as %q", got)
+	}
+	desc, _ := fake.mrBody["description"].(string)
+	if !strings.Contains(desc, "Set the version to `1.0.0` by hand in `App/App.csproj`") {
+		t.Errorf("MR should still ask for the version by hand:\n%s", desc)
+	}
+}
+
+func TestSetApplicationName(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in, want, existing string
+		changed            bool
+	}{
+		"adds":           {"<Project>\n  <PropertyGroup>\n    <A>1</A>\n  </PropertyGroup>\n</Project>", "<Project>\n  <PropertyGroup>\n    <A>1</A>\n    <ApplicationName>X</ApplicationName>\n  </PropertyGroup>\n</Project>", "", true},
+		"keeps existing": {"<Project><PropertyGroup><ApplicationName>Mine</ApplicationName></PropertyGroup></Project>", "<Project><PropertyGroup><ApplicationName>Mine</ApplicationName></PropertyGroup></Project>", "Mine", false},
+		"fills empty":    {"<Project><PropertyGroup><applicationname></applicationname></PropertyGroup></Project>", "<Project><PropertyGroup><applicationname>X</applicationname></PropertyGroup></Project>", "", true},
+	} {
+		got, existing, changed := version.SetApplicationName([]byte(tc.in), "X")
+		if string(got) != tc.want || existing != tc.existing || changed != tc.changed {
+			t.Errorf("%s: got (%q, %q, %v), want (%q, %q, %v)", name, got, existing, changed, tc.want, tc.existing, tc.changed)
+		}
 	}
 }

@@ -46,6 +46,11 @@ type Template struct {
 	// template's own version bump looks for.
 	CsprojVersionElement string `yaml:"csproj_version_element,omitempty"`
 
+	// CsprojApplicationName makes sure the detected .csproj has an
+	// <ApplicationName> (the file name without .csproj when it has none), which
+	// the template's pipeline names the build artifact after.
+	CsprojApplicationName bool `yaml:"csproj_application_name,omitempty"`
+
 	Detect                []string `yaml:"detect,omitempty"`
 	DetectContentContains string   `yaml:"detect_content_contains,omitempty"`
 }
@@ -154,6 +159,9 @@ type ExtraVariable struct {
 // ResolvesCsproj reports whether any part of the template needs the target
 // project's .csproj path, so Plan knows to look for it.
 func (t *Template) ResolvesCsproj() bool {
+	if t.CsprojApplicationName {
+		return true
+	}
 	for _, f := range t.Files {
 		if f.CsprojPlaceholder {
 			return true

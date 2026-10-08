@@ -54,6 +54,9 @@ type FileDiff struct {
 	// version is rewritten in place, as opposed to a file generated from the
 	// template bundle.
 	Edit bool `json:"edit,omitempty"`
+	// Warning is a follow-up the reviewer has to do by hand even though the
+	// file is otherwise edited (e.g. its version couldn't be set).
+	Warning string `json:"warning,omitempty"`
 }
 
 // Plan is the full set of file diffs for one project + template pick.
@@ -74,6 +77,11 @@ type Plan struct {
 	// only test projects, several candidates) so the MR can ask for it by hand.
 	Csproj      string `json:"csproj,omitempty"`
 	CsprojIssue string `json:"csproj_issue,omitempty"`
+	// ApplicationName is the <ApplicationName> the detected .csproj ends up
+	// with (templates with csproj_application_name): its existing value, or
+	// the one being added (ApplicationNameAdded).
+	ApplicationName      string `json:"application_name,omitempty"`
+	ApplicationNameAdded bool   `json:"application_name_added,omitempty"`
 	// Error is set instead of Files when planning this project failed (e.g.
 	// the project couldn't be resolved) -- a batch run records it and moves on
 	// so one bad project doesn't block the rest; Apply reports it as failed.
@@ -131,8 +139,17 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 		return nil, fmt.Errorf("listing repository tree: %w", err)
 	}
 	if tmpl.ResolvesCsproj() {
-		if plan.Csproj, plan.CsprojIssue, err = b.resolveCsproj(ctx, plan, tree); err != nil {
+		var csprojContent string
+		if plan.Csproj, plan.CsprojIssue, csprojContent, err = b.resolveCsproj(ctx, plan, tree); err != nil {
 			return nil, err
+		}
+		if tmpl.CsprojApplicationName && plan.Csproj != "" {
+			name := strings.TrimSuffix(path.Base(plan.Csproj), path.Ext(plan.Csproj))
+			_, existing, changed := version.SetApplicationName([]byte(csprojContent), name)
+			plan.ApplicationName, plan.ApplicationNameAdded = name, changed
+			if !changed {
+				plan.ApplicationName = existing
+			}
 		}
 	}
 
@@ -199,8 +216,7 @@ func (b *Bootstrapper) planVersionEdits(ctx context.Context, plan *Plan, tmpl *c
 		if node.Type != "blob" || bundled[node.Path] {
 			continue
 		}
-		edit := version.EditorFor(node.Path, opts)
-		if edit == nil {
+		if version.EditorFor(node.Path, opts) == nil {
 			continue
 		}
 		file, _, err := b.Client.REST.RepositoryFiles.GetFile(plan.ProjectID, node.Path, &gitlab.GetFileOptions{
@@ -210,23 +226,68 @@ func (b *Bootstrapper) planVersionEdits(ctx context.Context, plan *Plan, tmpl *c
 			return nil, fmt.Errorf("reading %s: %w", node.Path, err)
 		}
 		content := decodedContent(file)
-		out, old, err := edit([]byte(content), plan.Version)
+		e := editFile(tmpl, plan, node.Path, content)
+		diff := FileDiff{TargetPath: node.Path, Edit: true}
+
+		var parts []string
 		switch {
-		case err != nil:
-			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "skipped", Edit: true,
-				Description: "version not updated, set it by hand: " + err.Error()})
-		case string(out) == content:
-			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "unchanged", Edit: true,
-				Description: fmt.Sprintf("version already %s", plan.Version)})
-		case old == "":
-			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "update", Edit: true,
-				Description: fmt.Sprintf("%s, will add %s", noVersionYet, plan.Version)})
+		case e.VersionErr != nil:
+			if !e.AppNameAdded {
+				diff.Action = "skipped"
+				diff.Description = "version not updated, set it by hand: " + e.VersionErr.Error()
+				diffs = append(diffs, diff)
+				continue
+			}
+			diff.Warning = e.VersionErr.Error()
+			parts = append(parts, "version not updated, set it by hand")
+		case e.OldVersion == "" && e.Content != content && e.VersionAdded:
+			parts = append(parts, fmt.Sprintf("%s, will add %s", noVersionYet, plan.Version))
+		case e.OldVersion == plan.Version:
+			parts = append(parts, fmt.Sprintf("version already %s", plan.Version))
 		default:
-			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "update", Edit: true,
-				Description: fmt.Sprintf("version %s → %s", old, plan.Version)})
+			parts = append(parts, fmt.Sprintf("version %s → %s", e.OldVersion, plan.Version))
 		}
+		if e.AppNameAdded {
+			parts = append(parts, fmt.Sprintf("will add <ApplicationName>%s</ApplicationName>", plan.ApplicationName))
+		}
+		diff.Description = strings.Join(parts, "; ")
+		diff.Action = "update"
+		if e.Content == content {
+			diff.Action = "unchanged"
+		}
+		diffs = append(diffs, diff)
 	}
 	return diffs, nil
+}
+
+// fileEdit is the result of every edit this tool makes to one existing repo
+// file: its version, and a .csproj's <ApplicationName>.
+type fileEdit struct {
+	Content      string
+	OldVersion   string // the version replaced; "" when none was set or one was added
+	VersionAdded bool   // the file had no version, and now has one
+	VersionErr   error  // set when the version could not be written
+	AppNameAdded bool
+}
+
+// editFile applies those edits to content. A version that can't be written
+// does not stop the <ApplicationName> from being added.
+func editFile(tmpl *config.Template, plan *Plan, filePath, content string) fileEdit {
+	e := fileEdit{Content: content}
+	if edit := version.EditorFor(filePath, versionOptions(tmpl)); edit != nil {
+		out, old, err := edit([]byte(content), plan.Version)
+		if err != nil {
+			e.VersionErr = err
+		} else {
+			e.Content, e.OldVersion, e.VersionAdded = string(out), old, old == "" && string(out) != content
+		}
+	}
+	if plan.ApplicationNameAdded && filePath == plan.Csproj {
+		if out, _, changed := version.SetApplicationName([]byte(e.Content), plan.ApplicationName); changed {
+			e.Content, e.AppNameAdded = string(out), true
+		}
+	}
+	return e
 }
 
 // noVersionYet starts the plan description of a file that declared no version
@@ -403,15 +464,15 @@ func (b *Bootstrapper) editedContent(ctx context.Context, plan *Plan, filePath, 
 		return "", false, fmt.Errorf("reading %s: %w", filePath, err)
 	}
 	current := decodedContent(file)
-	edit := version.EditorFor(filePath, versionOptions(b.Templates.Find(plan.Template)))
-	if edit == nil {
+	tmpl := b.Templates.Find(plan.Template)
+	if version.EditorFor(filePath, versionOptions(tmpl)) == nil {
 		return "", false, fmt.Errorf("no version editor for %s", filePath)
 	}
-	out, _, err := edit([]byte(current), plan.Version)
-	if err != nil {
-		return "", false, fmt.Errorf("setting version in %s: %w", filePath, err)
+	e := editFile(tmpl, plan, filePath, current)
+	if e.VersionErr != nil && !e.AppNameAdded {
+		return "", false, fmt.Errorf("setting version in %s: %w", filePath, e.VersionErr)
 	}
-	return string(out), string(out) != current, nil
+	return e.Content, e.Content != current, nil
 }
 
 // mrDescription renders a template's MRChecklist (if any) as a checklist
@@ -539,8 +600,12 @@ func writeVersionSection(b *strings.Builder, plan *Plan) {
 		switch {
 		case f.Action == "update" && f.Edit && strings.HasPrefix(f.Description, noVersionYet):
 			added = append(added, "`"+f.TargetPath+"`")
+		case f.Warning != "":
+			manual = append(manual, fmt.Sprintf("- [ ] Set the version to `%s` by hand in `%s` -- %s\n", plan.Version, f.TargetPath, f.Warning))
 		case f.Action == "skipped":
 			manual = append(manual, fmt.Sprintf("- [ ] Set the version to `%s` by hand in `%s` -- %s\n", plan.Version, f.TargetPath, strings.TrimPrefix(f.Description, "version not updated, set it by hand: ")))
+		case f.Edit && strings.HasPrefix(f.Description, "version already"):
+			// only the <ApplicationName> changed; the version was already right
 		case f.Action != "unchanged" && (f.Edit || version.Bundled(f.TargetPath) != nil):
 			updated = append(updated, "`"+f.TargetPath+"`")
 		}
