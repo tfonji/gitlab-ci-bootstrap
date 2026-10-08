@@ -41,6 +41,11 @@ type Template struct {
 	// an informational hint printed for whoever triggers the pipeline --
 	// they never decide what gets applied. The human's template pick
 	// (TEMPLATE_NAME pipeline variable) is the only thing Plan/Apply act on.
+	// CsprojVersionElement is the element name written when a .csproj has no
+	// version yet ("Version" when empty). It must be the spelling the
+	// template's own version bump looks for.
+	CsprojVersionElement string `yaml:"csproj_version_element,omitempty"`
+
 	Detect                []string `yaml:"detect,omitempty"`
 	DetectContentContains string   `yaml:"detect_content_contains,omitempty"`
 }

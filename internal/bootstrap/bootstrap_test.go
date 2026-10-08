@@ -166,7 +166,8 @@ func newTestBootstrapper(t *testing.T, fake *fakeGitLab) *Bootstrapper {
 				{TargetPath: "version.txt", SourcePath: versionTxt, Source: config.SourceLocal},
 			},
 		}, {
-			Name: "dotnet",
+			Name:                 "dotnet",
+			CsprojVersionElement: "version",
 			Files: []config.FileSpec{
 				{TargetPath: ".gitlab-ci.yml", SourcePath: "templates/dotnet.gitlab.yml",
 					ExtraVariables: []config.ExtraVariable{{Name: "version_file", From: config.FromCsproj}}},
@@ -231,8 +232,8 @@ func TestPlanVersionFileStates(t *testing.T) {
 	if got := files["pom.xml"]; got.Action != "unchanged" {
 		t.Errorf("pom.xml already at target version: %+v", got)
 	}
-	if got := files["package.json"]; got.Action != "skipped" {
-		t.Errorf("package.json without a version should be skipped: %+v", got)
+	if got := files["package.json"]; got.Action != "update" || !strings.HasPrefix(got.Description, noVersionYet) {
+		t.Errorf("package.json without a version should get one: %+v", got)
 	}
 	for _, ignored := range []string{"README.md", "sub/pom.xml"} {
 		if _, ok := files[ignored]; ok {
@@ -270,8 +271,8 @@ func TestApplyWritesVersionAndExplainsInMR(t *testing.T) {
 	if got := committed["version.txt"]; got != "version: 1.0.1\n" {
 		t.Errorf("version.txt committed as %q", got)
 	}
-	if _, ok := committed["package.json"]; ok {
-		t.Error("package.json has no literal version and must not be committed")
+	if got, want := committed["package.json"], `{"name":"x","version":"1.0.1"}`; got != want {
+		t.Errorf("package.json committed as %q, want %q", got, want)
 	}
 
 	desc, _ := fake.mrBody["description"].(string)
@@ -279,8 +280,8 @@ func TestApplyWritesVersionAndExplainsInMR(t *testing.T) {
 		"## Group-level CI/CD variables",
 		"- [ ] `IS_ARTIFACTORY_ENABLED` -- set to `true`",
 		"## Version",
-		"Version set to `1.0.1` (latest tag 1.0.0, patch bumped) in `version.txt`, `pom.xml`",
-		"Set the version to `1.0.1` by hand in `package.json`",
+		"Version set to `1.0.1` (latest tag 1.0.0, patch bumped) in `version.txt`, `pom.xml`. Confirm",
+		"Confirm the version `1.0.1` added to `package.json`, which declared none",
 	} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("MR description missing %q:\n%s", want, desc)
@@ -647,5 +648,35 @@ func TestClassifyCsproj(t *testing.T) {
 		if got.Test != tc.wantTest || got.Deployable != tc.wantDeploy {
 			t.Errorf("%s: got test=%v deployable=%v, want test=%v deployable=%v", name, got.Test, got.Deployable, tc.wantTest, tc.wantDeploy)
 		}
+	}
+}
+
+func TestApplyAddsMissingVersionToCsprojUsingTheTemplatesSpelling(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{
+		"App/App.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n",
+	}}
+	b := newTestBootstrapper(t, fake)
+	plan, err := b.Plan(context.Background(), 7, "dotnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := planFiles(plan)["App/App.csproj"]; f.Action != "update" || !strings.HasPrefix(f.Description, noVersionYet) {
+		t.Fatalf("plan for the csproj: %+v", f)
+	}
+	if _, err := b.Apply(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	for _, a := range fake.commit["actions"].([]any) {
+		if m := a.(map[string]any); m["file_path"] == "App/App.csproj" {
+			got = m["content"].(string)
+		}
+	}
+	if want := "    <version>1.0.0</version>\n  </PropertyGroup>"; !strings.Contains(got, want) {
+		t.Errorf("csproj committed as %q, want it to contain %q", got, want)
+	}
+	desc, _ := fake.mrBody["description"].(string)
+	if !strings.Contains(desc, "added to `App/App.csproj`, which declared none") {
+		t.Errorf("MR should ask to confirm the added version:\n%s", desc)
 	}
 }

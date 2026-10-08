@@ -148,6 +148,25 @@ export GITLAB_TOKEN=...
 ./bin/gitlab-ci-bootstrap apply --plan=plan.json --out=result.json
 ```
 
+## Files without a version
+
+A version-carrying file that exists but declares no version gets one, so the
+pipeline has something to bump, and the MR asks the reviewer to confirm it:
+
+| File                                           | Where it is added                                                                                                                                                                                         |
+|------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `.csproj`                                      | `<Version>` (or the template's `csproj_version_element`, e.g. `version` for `dotnet-core-iis-ci-cd`) as the last child of the first unconditional `PropertyGroup`; a new `PropertyGroup` if there is none |
+| `pom.xml`                                      | `<version>` right after the project's own `<artifactId>` (the project was inheriting its parent's version)                                                                                                |
+| `package.json`                                 | `"version"` right after `"name"` (first key if there is no name)                                                                                                                                          |
+| `pyproject.toml`                               | `version = "..."` under `[project]`, else `[tool.poetry]`                                                                                                                                                 |
+| `app.properties`, a template's `PROPERTY_FILE` | a `version=...` line at the end                                                                                                                                                                           |
+
+Never added: a version that is declared but unsafe to touch (a `${property}` or
+`$(property)` reference, a `dynamic = ["version"]` in `pyproject.toml`) and
+`gradle.properties` (the version usually lives in `build.gradle`, where a second
+one here would be silently ignored). Those still show up as "set it by hand".
+Indentation and line endings of the surrounding file are preserved.
+
 ## Detecting the .csproj
 
 Templates that need the app's .csproj path (`dotnet-framework-iis-ci-cd`'s

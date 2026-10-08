@@ -192,14 +192,14 @@ func (b *Bootstrapper) planVersionEdits(ctx context.Context, plan *Plan, tmpl *c
 	for _, f := range tmpl.Files {
 		bundled[f.TargetPath] = true
 	}
-	propertyFiles := templatePropertyFiles(tmpl)
+	opts := versionOptions(tmpl)
 
 	var diffs []FileDiff
 	for _, node := range tree {
 		if node.Type != "blob" || bundled[node.Path] {
 			continue
 		}
-		edit := version.EditorFor(node.Path, propertyFiles)
+		edit := version.EditorFor(node.Path, opts)
 		if edit == nil {
 			continue
 		}
@@ -218,12 +218,23 @@ func (b *Bootstrapper) planVersionEdits(ctx context.Context, plan *Plan, tmpl *c
 		case string(out) == content:
 			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "unchanged", Edit: true,
 				Description: fmt.Sprintf("version already %s", plan.Version)})
+		case old == "":
+			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "update", Edit: true,
+				Description: fmt.Sprintf("%s, will add %s", noVersionYet, plan.Version)})
 		default:
 			diffs = append(diffs, FileDiff{TargetPath: node.Path, Action: "update", Edit: true,
 				Description: fmt.Sprintf("version %s → %s", old, plan.Version)})
 		}
 	}
 	return diffs, nil
+}
+
+// noVersionYet starts the plan description of a file that declared no version
+// and is getting one.
+const noVersionYet = "no version yet"
+
+func versionOptions(tmpl *config.Template) version.Options {
+	return version.Options{PropertyFiles: templatePropertyFiles(tmpl), CsprojElement: tmpl.CsprojVersionElement}
 }
 
 // templatePropertyFiles returns the template's PROPERTY_FILE override(s), the
@@ -392,7 +403,7 @@ func (b *Bootstrapper) editedContent(ctx context.Context, plan *Plan, filePath, 
 		return "", false, fmt.Errorf("reading %s: %w", filePath, err)
 	}
 	current := decodedContent(file)
-	edit := version.EditorFor(filePath, templatePropertyFiles(b.Templates.Find(plan.Template)))
+	edit := version.EditorFor(filePath, versionOptions(b.Templates.Find(plan.Template)))
 	if edit == nil {
 		return "", false, fmt.Errorf("no version editor for %s", filePath)
 	}
@@ -523,9 +534,11 @@ func writeVersionSection(b *strings.Builder, plan *Plan) {
 	if plan == nil || plan.Version == "" {
 		return
 	}
-	var updated, manual []string
+	var updated, added, manual []string
 	for _, f := range plan.Files {
 		switch {
+		case f.Action == "update" && f.Edit && strings.HasPrefix(f.Description, noVersionYet):
+			added = append(added, "`"+f.TargetPath+"`")
 		case f.Action == "skipped":
 			manual = append(manual, fmt.Sprintf("- [ ] Set the version to `%s` by hand in `%s` -- %s\n", plan.Version, f.TargetPath, strings.TrimPrefix(f.Description, "version not updated, set it by hand: ")))
 		case f.Action != "unchanged" && (f.Edit || version.Bundled(f.TargetPath) != nil):
@@ -538,6 +551,9 @@ func writeVersionSection(b *strings.Builder, plan *Plan) {
 		fmt.Fprintf(b, " in %s", strings.Join(updated, ", "))
 	}
 	b.WriteString(". Confirm this is the intended version.\n")
+	if len(added) > 0 {
+		fmt.Fprintf(b, "- [ ] Confirm the version `%s` added to %s, which declared none, is where the project keeps its version.\n", plan.Version, strings.Join(added, ", "))
+	}
 	for _, m := range manual {
 		b.WriteString(m)
 	}

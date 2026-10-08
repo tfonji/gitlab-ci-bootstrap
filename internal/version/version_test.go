@@ -1,6 +1,8 @@
 package version
 
 import (
+	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"strings"
 	"testing"
@@ -153,12 +155,15 @@ func TestEditorsNoLiteralVersion(t *testing.T) {
 		edit Editor
 		in   string
 	}{
-		{"pom inherits parent", Pom, `<project><parent><version>1</version></parent></project>`},
 		{"pom property undefined", Pom, `<project><version>${revision}</version></project>`},
-		{"package.json missing", PackageJSON, `{"name":"x"}`},
+		{"package.json empty object", PackageJSON, `{}`},
+		{"pom version is CDATA", Pom, `<project><artifactId>a</artifactId><version><![CDATA[1]]></version></project>`},
+		{"pom without artifactId", Pom, `<project><parent><version>1</version></parent></project>`},
+		{"csproj without any element", Csproj, `<Project/>`},
+		{"pyproject without project table", Pyproject, "[tool.black]\nline-length = 88\n"},
+		{"gradle.properties is never added to", Properties(`(?:project\.)?version`), "org.gradle.jvmargs=-Xmx2g\n"},
 		{"package.json non-string", PackageJSON, `{"version": 3}`},
 		{"csproj property", Csproj, `<Version>$(Base)</Version>`},
-		{"csproj none", Csproj, `<Project/>`},
 		{"properties none", Properties(`version`), "name=app\n"},
 		{"properties reference", Properties(`version`), "version=${v}\n"},
 		{"pyproject dynamic", Pyproject, "[project]\ndynamic = [\"version\"]\n"},
@@ -186,7 +191,7 @@ func TestEditorFor(t *testing.T) {
 		"README.md":             false,
 		"nested/app.properties": false,
 	} {
-		if got := EditorFor(path, []string{"conf/custom.props"}) != nil; got != want {
+		if got := EditorFor(path, Options{PropertyFiles: []string{"conf/custom.props"}}) != nil; got != want {
 			t.Errorf("EditorFor(%q) matched = %v, want %v", path, got, want)
 		}
 	}
@@ -196,5 +201,137 @@ func TestCsprojMatchesElementNamesCaseInsensitively(t *testing.T) {
 	out, old, err := Csproj([]byte("<Project><PropertyGroup><version>0.9.0</version></PropertyGroup></Project>"), "1.0.1")
 	if err != nil || old != "0.9.0" || !strings.Contains(string(out), "<version>1.0.1</version>") {
 		t.Errorf("got %q old=%q err=%v", out, old, err)
+	}
+}
+
+func TestEditorsAddMissingVersion(t *testing.T) {
+	cases := []struct {
+		name string
+		edit Editor
+		in   string
+		want string
+	}{
+		{
+			name: "pom inheriting its version from the parent gets its own after artifactId",
+			edit: Pom,
+			in:   "<project>\n  <parent><groupId>g</groupId><version>9.9.9</version></parent>\n  <artifactId>a</artifactId>\n  <dependencies/>\n</project>\n",
+			want: "<project>\n  <parent><groupId>g</groupId><version>9.9.9</version></parent>\n  <artifactId>a</artifactId>\n  <version>2.0.0</version>\n  <dependencies/>\n</project>\n",
+		},
+		{
+			name: "pom with crlf line endings and a dependency artifactId earlier in the text",
+			edit: Pom,
+			in:   "<project>\r\n  <artifactId>a</artifactId>\r\n</project>\r\n",
+			want: "<project>\r\n  <artifactId>a</artifactId>\r\n  <version>2.0.0</version>\r\n</project>\r\n",
+		},
+		{
+			name: "package.json gets version after name, keeping indentation",
+			edit: PackageJSON,
+			in:   "{\n    \"name\": \"x\",\n    \"scripts\": {}\n}\n",
+			want: "{\n    \"name\": \"x\",\n    \"version\": \"2.0.0\",\n    \"scripts\": {}\n}\n",
+		},
+		{
+			name: "package.json whose name is the last key",
+			edit: PackageJSON,
+			in:   "{\n  \"name\": \"x\"\n}\n",
+			want: "{\n  \"name\": \"x\",\n  \"version\": \"2.0.0\"\n}\n",
+		},
+		{
+			name: "package.json without a name gets it first",
+			edit: PackageJSON,
+			in:   "{\n  \"private\": true\n}\n",
+			want: "{\n  \"version\": \"2.0.0\",\n  \"private\": true\n}\n",
+		},
+		{
+			name: "minified package.json",
+			edit: PackageJSON,
+			in:   `{"name":"x","main":"i.js"}`,
+			want: `{"name":"x","version":"2.0.0","main":"i.js"}`,
+		},
+		{
+			name: "csproj adds to its first unconditional property group",
+			edit: CsprojAdding(""),
+			in:   "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup Condition=\"'$(X)'=='1'\">\n    <A>1</A>\n  </PropertyGroup>\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n",
+			want: "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup Condition=\"'$(X)'=='1'\">\n    <A>1</A>\n  </PropertyGroup>\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n    <Version>2.0.0</Version>\n  </PropertyGroup>\n</Project>\n",
+		},
+		{
+			name: "csproj uses the requested element spelling and tab indentation",
+			edit: CsprojAdding("version"),
+			in:   "<Project>\r\n\t<PropertyGroup>\r\n\t\t<OutputType>Exe</OutputType>\r\n\t</PropertyGroup>\r\n</Project>\r\n",
+			want: "<Project>\r\n\t<PropertyGroup>\r\n\t\t<OutputType>Exe</OutputType>\r\n\t\t<version>2.0.0</version>\r\n\t</PropertyGroup>\r\n</Project>\r\n",
+		},
+		{
+			name: "csproj with no property group gets one",
+			edit: CsprojAdding(""),
+			in:   "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup/>\n</Project>\n",
+			want: "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <Version>2.0.0</Version>\n  </PropertyGroup>\n  <ItemGroup/>\n</Project>\n",
+		},
+		{
+			name: "csproj with an existing version is edited, not added to",
+			edit: CsprojAdding("version"),
+			in:   "<Project><PropertyGroup><Version>1.0.0</Version></PropertyGroup></Project>",
+			want: "<Project><PropertyGroup><Version>2.0.0</Version></PropertyGroup></Project>",
+		},
+		{
+			name: "pyproject adds under [project]",
+			edit: Pyproject,
+			in:   "[build-system]\nrequires = []\n\n[project]\nname = \"a\"\n",
+			want: "[build-system]\nrequires = []\n\n[project]\nversion = \"2.0.0\"\nname = \"a\"\n",
+		},
+		{
+			name: "pyproject adds under [tool.poetry] when there is no [project]",
+			edit: Pyproject,
+			in:   "[tool.poetry]\nname = \"a\"\n",
+			want: "[tool.poetry]\nversion = \"2.0.0\"\nname = \"a\"\n",
+		},
+		{
+			name: "app.properties gets a version line",
+			edit: PropertiesAdding(`version`, "version"),
+			in:   "name=app",
+			want: "name=app\nversion=2.0.0\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, old, err := c.edit([]byte(c.in), "2.0.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("content:\n got %q\nwant %q", got, c.want)
+			}
+			if strings.Contains(c.name, "existing") != (old != "") {
+				t.Errorf("old = %q (empty means a version was added)", old)
+			}
+		})
+	}
+}
+
+func TestPyprojectDynamicVersionIsNotAddedTo(t *testing.T) {
+	for _, in := range []string{
+		"[project]\nname = \"a\"\ndynamic = [\"version\"]\n",
+		"[project]\ndynamic = [\n  \"readme\",\n  \"version\",\n]\n",
+	} {
+		_, _, err := Pyproject([]byte(in), "2.0.0")
+		if !errors.Is(err, ErrNoVersion) || errors.Is(err, ErrAbsent) {
+			t.Errorf("%q: err = %v, want a non-absent ErrNoVersion", in, err)
+		}
+	}
+}
+
+func TestAddedVersionsStayWellFormed(t *testing.T) {
+	out, _, err := PackageJSON([]byte("{\n  \"name\": \"x\",\n  \"dependencies\": {\"a\": \"1\"}\n}\n"), "2.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil || m["version"] != "2.0.0" {
+		t.Errorf("package.json after adding: %s (%v)", out, err)
+	}
+	pom, _, err := Pom([]byte("<project><artifactId>a</artifactId></project>"), "2.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := xml.Unmarshal(pom, new(struct{})); err != nil {
+		t.Errorf("pom after adding is not well-formed XML: %v\n%s", err, pom)
 	}
 }
