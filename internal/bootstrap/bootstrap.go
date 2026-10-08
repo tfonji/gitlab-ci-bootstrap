@@ -69,6 +69,11 @@ type Plan struct {
 	LatestTag     string `json:"latest_tag,omitempty"`
 	Version       string `json:"version,omitempty"`
 	VersionReason string `json:"version_reason,omitempty"`
+	// Csproj is the repo-relative path of the .csproj detected for templates
+	// that need one; CsprojIssue says why none could be chosen (none found,
+	// only test projects, several candidates) so the MR can ask for it by hand.
+	Csproj      string `json:"csproj,omitempty"`
+	CsprojIssue string `json:"csproj_issue,omitempty"`
 	// Error is set instead of Files when planning this project failed (e.g.
 	// the project couldn't be resolved) -- a batch run records it and moves on
 	// so one bad project doesn't block the rest; Apply reports it as failed.
@@ -121,8 +126,18 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 	plan.LatestTag = latest
 	plan.Version, plan.VersionReason = version.Next(latest)
 
+	tree, err := b.listTree(ctx, projectID)
+	if err != nil && !isNotFound(err) { // not found: empty repository
+		return nil, fmt.Errorf("listing repository tree: %w", err)
+	}
+	if tmpl.ResolvesCsproj() {
+		if plan.Csproj, plan.CsprojIssue, err = b.resolveCsproj(ctx, plan, tree); err != nil {
+			return nil, err
+		}
+	}
+
 	for _, f := range tmpl.Files {
-		desired, err := b.content(f, plan.Version)
+		desired, err := b.content(f, plan)
 		if err != nil {
 			return nil, err
 		}
@@ -143,7 +158,7 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 		}
 	}
 
-	edits, err := b.planVersionEdits(ctx, plan, tmpl)
+	edits, err := b.planVersionEdits(ctx, plan, tmpl, tree)
 	if err != nil {
 		return nil, err
 	}
@@ -172,15 +187,7 @@ func (b *Bootstrapper) latestTag(ctx context.Context, projectID int64) (string, 
 // package.json, .csproj, properties files, ...) on the default branch and
 // plans rewriting each to plan.Version. Files a template bundles itself
 // (version.txt, .bumpversion.cfg, ...) are handled in content(), not here.
-func (b *Bootstrapper) planVersionEdits(ctx context.Context, plan *Plan, tmpl *config.Template) ([]FileDiff, error) {
-	tree, err := b.listTree(ctx, plan.ProjectID)
-	if err != nil {
-		if isNotFound(err) { // empty repository
-			return nil, nil
-		}
-		return nil, fmt.Errorf("listing repository tree: %w", err)
-	}
-
+func (b *Bootstrapper) planVersionEdits(ctx context.Context, plan *Plan, tmpl *config.Template, tree []*gitlab.TreeNode) ([]FileDiff, error) {
 	bundled := map[string]bool{}
 	for _, f := range tmpl.Files {
 		bundled[f.TargetPath] = true
@@ -267,7 +274,7 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 			}
 			content = edited
 		} else {
-			content, err = b.templateContentFor(plan.Template, f.TargetPath, plan.Version)
+			content, err = b.templateContentFor(plan, f.TargetPath)
 			if err != nil {
 				return nil, err
 			}
@@ -412,6 +419,7 @@ func mrDescription(tmpl *config.Template, plan *Plan) string {
 		"- [ ] Add this application's CMDB ID as a Topic on the project (Settings > General > Topics).\n")
 
 	writeVersionSection(&b, plan)
+	writeCsprojSection(&b, tmpl, plan)
 
 	var checklist *config.MRChecklist
 	if tmpl != nil {
@@ -539,7 +547,8 @@ func writeVersionSection(b *strings.Builder, plan *Plan) {
 // a local file is read verbatim; an include-sourced file's "content" is a
 // short generated `include:project` stub -- no network call, since nothing
 // is fetched from the shared templates project, only referenced.
-func (b *Bootstrapper) content(f config.FileSpec, ver string) (string, error) {
+func (b *Bootstrapper) content(f config.FileSpec, plan *Plan) (string, error) {
+	ver := plan.Version
 	if f.IsLocal() {
 		data, err := os.ReadFile(f.SourcePath)
 		if err != nil {
@@ -552,9 +561,25 @@ func (b *Bootstrapper) content(f config.FileSpec, ver string) (string, error) {
 			}
 			data = out
 		}
+		if f.CsprojPlaceholder && plan.Csproj != "" {
+			data = []byte(strings.ReplaceAll(string(data), CsprojPlaceholder, plan.Csproj))
+		}
 		return string(data), nil
 	}
-	return includeStub(b.Templates.RemoteSource, f.SourcePath, f.ExtraVariables), nil
+	return includeStub(b.Templates.RemoteSource, f.SourcePath, resolveVariables(f.ExtraVariables, plan)), nil
+}
+
+// resolveVariables fills in the variables whose value comes from what was
+// detected in the target project.
+func resolveVariables(vars []config.ExtraVariable, plan *Plan) []config.ExtraVariable {
+	out := make([]config.ExtraVariable, len(vars))
+	for i, v := range vars {
+		if v.From == config.FromCsproj {
+			v.Value = plan.Csproj
+		}
+		out[i] = v
+	}
+	return out
 }
 
 // globalExtraVariables are written into the `variables:` block of every
@@ -623,17 +648,17 @@ func includeStub(remote config.RemoteSource, file string, extra []config.ExtraVa
 	return b.String()
 }
 
-func (b *Bootstrapper) templateContentFor(templateName, targetPath, ver string) (string, error) {
-	tmpl := b.Templates.Find(templateName)
+func (b *Bootstrapper) templateContentFor(plan *Plan, targetPath string) (string, error) {
+	tmpl := b.Templates.Find(plan.Template)
 	if tmpl == nil {
-		return "", fmt.Errorf("unknown template %q", templateName)
+		return "", fmt.Errorf("unknown template %q", plan.Template)
 	}
 	for _, f := range tmpl.Files {
 		if f.TargetPath == targetPath {
-			return b.content(f, ver)
+			return b.content(f, plan)
 		}
 	}
-	return "", fmt.Errorf("template %q has no file spec for target %q", templateName, targetPath)
+	return "", fmt.Errorf("template %q has no file spec for target %q", plan.Template, targetPath)
 }
 
 func decodedContent(f *gitlab.File) string {

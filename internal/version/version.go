@@ -109,10 +109,11 @@ func Properties(key string) Editor {
 	return lineEditor(regexp.MustCompile(`(?m)^([ \t]*(?:` + key + `)[ \t]*[=:][ \t]*)([^\r\n]*?)([ \t]*)\r?$`))
 }
 
-var csprojVersion = regexp.MustCompile(`(<Version>\s*)([^<]*?)(\s*</Version>)`)
-var csprojVersionPrefix = regexp.MustCompile(`(<VersionPrefix>\s*)([^<]*?)(\s*</VersionPrefix>)`)
+var csprojVersion = regexp.MustCompile(`(?i)(<Version>\s*)([^<]*?)(\s*</Version>)`)
+var csprojVersionPrefix = regexp.MustCompile(`(?i)(<VersionPrefix>\s*)([^<]*?)(\s*</VersionPrefix>)`)
 
-// Csproj edits the <Version> element (falling back to <VersionPrefix>).
+// Csproj edits the <Version> element (falling back to <VersionPrefix>);
+// element names are matched case-insensitively, as MSBuild does.
 func Csproj(content []byte, version string) ([]byte, string, error) {
 	out, old, err := lineEditor(csprojVersion)(content, version)
 	if errors.Is(err, ErrNoVersion) {

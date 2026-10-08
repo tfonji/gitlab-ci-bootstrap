@@ -600,6 +600,8 @@ templates:
           options:
           - "Yes"
           - "No"
+        - name: version_file
+          from: csproj
       - target_path: nuget.config
         source_path: files/nuget.config
         source: local
@@ -623,7 +625,6 @@ templates:
       - BuildPlatform
       - ARTIFACT_STAGING
       - ARTIFACT_NAME
-      - version_file
       - DEVELOPMENT_DEPLOY_WHEN
       - TESTING_DEPLOY_WHEN
       - STAGING_DEPLOY_WHEN
@@ -641,7 +642,6 @@ templates:
         - BACKUP_ROOT
       notes:
       - "`ARTIFACT_NAME` must exactly match the `<ApplicationName>` tag in the .csproj -- `package:download` names the file after `<ApplicationName>`, and the IIS deploy jobs look for `ARTIFACT_NAME` when finding it locally. A mismatch means deploy can't find the artifact."
-      - "`version_file` defaults to a stale example path (`ReferralEngine.API/ReferralEngine.API.csproj`) in the shared template, not blank -- `dotnetPreRelease()` only falls back to auto-discovering the `.csproj` file when `version_file` is empty, so leaving the default as-is points the build at a `.csproj` that doesn't exist in this project. Set it to this app's actual `.csproj` path (or blank, to use auto-discovery)."
       - "Set `DEVELOPMENT_DEPLOY_WHEN`, `TESTING_DEPLOY_WHEN`, `STAGING_DEPLOY_WHEN`, `STAGING_DR_DEPLOY_WHEN`, and `PERFORMANCE_DEPLOY_WHEN` to `on_success` as project variables -- that is the default; for an environment whose deploy should behave differently, use `on_failure`, `always`, `manual`, or `never` instead."
   - name: dotnet-framework-iis-ci-cd
     files:
@@ -671,6 +671,7 @@ templates:
       - target_path: .bumpversion.cfg
         source_path: files/bumpversion.cfg
         source: local
+        csproj_placeholder: true
     detect: ["*.csproj"]
     detect_content_contains: "<TargetFrameworkVersion>"
     mr_checklist:
@@ -706,7 +707,6 @@ templates:
         - BACKUP_ROOT
       notes:
       - "`package:test`'s script reads `TestAssemblyFilter` and `VSTEST_PATH`, neither of which the shared template defines anywhere -- without them `Get-ChildItem -Filter $env:TestAssemblyFilter` matches nothing and the `vstest.console.exe` invocation has nothing to run, so the job silently produces no test results (it won't fail the pipeline itself since `package:test` is `allow_failure: true`). `TestAssemblyFilter` is per-app (e.g. `*.Tests.dll`); `VSTEST_PATH` looks like a fixed path on the shared Windows runner pool, so confirm it already exists at group level rather than assuming -- we don't have independent confirmation of that the way we do for `ARTIFACTORY_URL` elsewhere."
-      - "Fill in the `<path to .csproj file>` placeholder in `.bumpversion.cfg` with this app's real .csproj path before merging, or `pre:config`/`bump:version` will fail."
       - "Set `DEVELOPMENT_DEPLOY_WHEN`, `TESTING_DEPLOY_WHEN`, `STAGING_DEPLOY_WHEN`, `STAGING_DR_DEPLOY_WHEN`, and `PERFORMANCE_DEPLOY_WHEN` to `on_success` as project variables -- that is the default; for an environment whose deploy should behave differently, use `on_failure`, `always`, `manual`, or `never` instead."
   - name: dotnet-ansible-ci-cd
     files:

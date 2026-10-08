@@ -153,6 +153,10 @@ func newTestBootstrapper(t *testing.T, fake *fakeGitLab) *Bootstrapper {
 	if err := os.WriteFile(versionTxt, []byte("version: x.y.z\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	bumpCfg := filepath.Join(dir, "bumpversion.cfg")
+	if err := os.WriteFile(bumpCfg, []byte("[bumpversion]\ncurrent_version = 1.0.0\n\n[bumpversion:file:"+CsprojPlaceholder+"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return New(client, &config.Templates{
 		RemoteSource: config.RemoteSource{ProjectPath: "shared/templates", Ref: "master"},
 		Templates: []config.Template{{
@@ -160,6 +164,13 @@ func newTestBootstrapper(t *testing.T, fake *fakeGitLab) *Bootstrapper {
 			Files: []config.FileSpec{
 				{TargetPath: ".gitlab-ci.yml", SourcePath: "templates/demo.gitlab.yml"},
 				{TargetPath: "version.txt", SourcePath: versionTxt, Source: config.SourceLocal},
+			},
+		}, {
+			Name: "dotnet",
+			Files: []config.FileSpec{
+				{TargetPath: ".gitlab-ci.yml", SourcePath: "templates/dotnet.gitlab.yml",
+					ExtraVariables: []config.ExtraVariable{{Name: "version_file", From: config.FromCsproj}}},
+				{TargetPath: ".bumpversion.cfg", SourcePath: bumpCfg, Source: config.SourceLocal, CsprojPlaceholder: true},
 			},
 		}},
 	})
@@ -499,5 +510,142 @@ func TestApplyPassesSkippedPlanThrough(t *testing.T) {
 	}
 	if len(fake.calls) != 0 {
 		t.Errorf("skipped plan made calls: %v", fake.calls)
+	}
+}
+
+const (
+	webCsproj  = `<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><version>0.9.0</version></PropertyGroup></Project>`
+	libCsproj  = `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><Version>1.0.0</Version></PropertyGroup></Project>`
+	testCsproj = `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" /></ItemGroup></Project>`
+)
+
+func TestPlanDetectsCsprojAndFillsPlaceholderAndVariable(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{
+		"src/App.Web/App.Web.csproj":         webCsproj,
+		"src/App.Core/App.Core.csproj":       libCsproj,
+		"tests/App.Checks/App.Checks.csproj": testCsproj,
+		"src/App.Web/bin/Old/Old.csproj":     webCsproj, // build output, ignored
+	}}
+	b := newTestBootstrapper(t, fake)
+
+	plan, err := b.Plan(context.Background(), 7, "dotnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "src/App.Web/App.Web.csproj"
+	if plan.Csproj != want || plan.CsprojIssue != "" {
+		t.Fatalf("csproj = %q (issue %q), want %q", plan.Csproj, plan.CsprojIssue, want)
+	}
+	stub, err := b.templateContentFor(plan, ".gitlab-ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stub, `version_file: "`+want+`"`) {
+		t.Errorf("stub should set version_file:\n%s", stub)
+	}
+	cfg, err := b.templateContentFor(plan, ".bumpversion.cfg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cfg, "[bumpversion:file:"+want+"]") || strings.Contains(cfg, CsprojPlaceholder) {
+		t.Errorf("placeholder not filled:\n%s", cfg)
+	}
+	var desc strings.Builder
+	writeCsprojSection(&desc, b.Templates.Find("dotnet"), plan)
+	if desc.Len() != 0 {
+		t.Errorf("MR should not ask for the csproj when it was detected:\n%s", desc.String())
+	}
+	// The lowercase <version> element in the chosen project is still versioned.
+	if f := planFiles(plan)[want]; f.Action != "update" {
+		t.Errorf("%s action = %q, want update", want, f.Action)
+	}
+}
+
+func TestPlanLeavesCsprojForTheMRWhenAmbiguous(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{
+		"Api/Api.csproj":       webCsproj,
+		"Portal/Portal.csproj": webCsproj,
+	}}
+	b := newTestBootstrapper(t, fake)
+
+	plan, err := b.Plan(context.Background(), 7, "dotnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Csproj != "" || !strings.Contains(plan.CsprojIssue, "`Api/Api.csproj`, `Portal/Portal.csproj`") {
+		t.Fatalf("csproj = %q, issue = %q; want unresolved naming both candidates", plan.Csproj, plan.CsprojIssue)
+	}
+	stub, _ := b.templateContentFor(plan, ".gitlab-ci.yml")
+	if !strings.Contains(stub, `version_file: ""`) {
+		t.Errorf("version_file should be blank:\n%s", stub)
+	}
+	cfg, _ := b.templateContentFor(plan, ".bumpversion.cfg")
+	if !strings.Contains(cfg, CsprojPlaceholder) {
+		t.Errorf("placeholder should stay:\n%s", cfg)
+	}
+	desc := mrDescription(b.Templates.Find("dotnet"), plan)
+	for _, want := range []string{"## .csproj path", "Replace `" + CsprojPlaceholder + "` in `.bumpversion.cfg`", "Set `version_file` in `.gitlab-ci.yml`", "`Portal/Portal.csproj`"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("MR description missing %q:\n%s", want, desc)
+		}
+	}
+}
+
+func TestPlanSkipsCsprojLookupForTemplatesThatDontNeedIt(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{"A/A.csproj": webCsproj, "B/B.csproj": webCsproj}}
+	b := newTestBootstrapper(t, fake)
+	plan, err := b.Plan(context.Background(), 7, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Csproj != "" || plan.CsprojIssue != "" {
+		t.Errorf("demo needs no csproj, got %q / %q", plan.Csproj, plan.CsprojIssue)
+	}
+}
+
+func TestPickCsproj(t *testing.T) {
+	web := func(p string) csprojInfo { return csprojInfo{Path: p, Deployable: true} }
+	lib := func(p string) csprojInfo { return csprojInfo{Path: p} }
+	test := func(p string) csprojInfo { return csprojInfo{Path: p, Test: true} }
+
+	for name, tc := range map[string]struct {
+		in        []csprojInfo
+		want      string
+		wantIssue string
+	}{
+		"none":                     {nil, "", "no .csproj"},
+		"only tests":               {[]csprojInfo{test("T.csproj")}, "", "only test projects"},
+		"single, even a library":   {[]csprojInfo{lib("L.csproj")}, "L.csproj", ""},
+		"single beside tests":      {[]csprojInfo{test("T.csproj"), lib("L.csproj")}, "L.csproj", ""},
+		"deployable among libs":    {[]csprojInfo{lib("L.csproj"), web("W.csproj"), test("T.csproj")}, "W.csproj", ""},
+		"two deployable":           {[]csprojInfo{web("A.csproj"), web("B.csproj")}, "", "several deployable"},
+		"several, none deployable": {[]csprojInfo{lib("A.csproj"), lib("B.csproj")}, "", "none is clearly"},
+	} {
+		got, issue := pickCsproj(tc.in)
+		if got != tc.want || (tc.wantIssue == "") != (issue == "") || !strings.Contains(issue, tc.wantIssue) {
+			t.Errorf("%s: got (%q, %q), want (%q, issue containing %q)", name, got, issue, tc.want, tc.wantIssue)
+		}
+	}
+}
+
+func TestClassifyCsproj(t *testing.T) {
+	for name, tc := range map[string]struct {
+		path, content        string
+		webConfig            bool
+		wantTest, wantDeploy bool
+	}{
+		"web sdk":            {"a/A.csproj", webCsproj, false, false, true},
+		"test sdk reference": {"a/A.csproj", testCsproj, false, true, false},
+		"test by name":       {"a/A.UnitTests.csproj", libCsproj, false, true, false},
+		"name with test":     {"a/Contest.csproj", libCsproj, false, false, false},
+		"exe":                {"a/A.csproj", `<OutputType>WinExe</OutputType>`, false, false, true},
+		"web.config beside":  {"a/A.csproj", `<Project ToolsVersion="15.0"/>`, true, false, true},
+		"framework web guid": {"a/A.csproj", `<ProjectTypeGuids>{349C5851-65DF-11DA-9384-00065B846F21};{FAE04EC0}</ProjectTypeGuids>`, false, false, true},
+		"plain library":      {"a/A.csproj", libCsproj, false, false, false},
+	} {
+		got := classifyCsproj(tc.path, tc.content, tc.webConfig)
+		if got.Test != tc.wantTest || got.Deployable != tc.wantDeploy {
+			t.Errorf("%s: got test=%v deployable=%v, want test=%v deployable=%v", name, got.Test, got.Deployable, tc.wantTest, tc.wantDeploy)
+		}
 	}
 }

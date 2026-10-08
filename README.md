@@ -114,7 +114,7 @@ Stages: `build → suggest → plan → apply`
   | `nuget.config` → `nuget.config` | all 5 .NET templates | Yes, auto-discovered walking up from cwd |
   | `pip.conf` → `pip.conf` | all 4 Python templates | No -- pipeline needs `PIP_CONFIG_FILE=$CI_PROJECT_DIR/pip.conf`; pip.conf also can't expand `${VAR}` for credentials, unlike the others |
   | `flyway.conf` → `flyway.conf` | `flyway-cd` only | No -- pipeline needs `flyway -configFiles=$CI_PROJECT_DIR/flyway.conf`; holds per-app DB `url`/`user` only, password comes from the `FLYWAY_PASSWORD` CI variable Flyway reads natively |
-  | `bumpversion.cfg` → `.bumpversion.cfg` | `dotnet-framework-iis-ci-cd` only | No -- read directly by the `bumpversion` CLI from the repo root; its `<path to .csproj file>` placeholder is per-app (not a generic TODO) and is called out in the MR's `mr_checklist` notes instead of the table above |
+  | `bumpversion.cfg` → `.bumpversion.cfg` | `dotnet-framework-iis-ci-cd` only | No -- read directly by the `bumpversion` CLI from the repo root; its `<path to .csproj file>` placeholder is filled in automatically from the detected .csproj (see "Detecting the .csproj") |
   | `bumpversion-ant-properties.cfg` → `.bumpversion.cfg` | `java-ant-tomcat-ci-cd`, `java-ant-fileDeploy-ci-cd` | No -- read directly by the `bumpversion` CLI from the repo root; assumes the app's properties file (see `PROPERTY_FILE`) is at `app.properties` -- update the `[bumpversion:file:...]` path if it lives elsewhere, called out in the MR's `mr_checklist` notes |
 
   **Gradle (`gradle.properties`), Ansible (`ansible.cfg`), Ant/Ivy
@@ -148,15 +148,31 @@ export GITLAB_TOKEN=...
 ./bin/gitlab-ci-bootstrap apply --plan=plan.json --out=result.json
 ```
 
+## Detecting the .csproj
+
+Templates that need the app's .csproj path (`dotnet-framework-iis-ci-cd`'s
+`.bumpversion.cfg` placeholder, `dotnet-core-iis-ci-cd`'s `version_file`
+variable) get it from the repo automatically. Declared in `templates.yaml`
+with `csproj_placeholder: true` on a local file, or `from: csproj` on an
+extra variable.
+
+- Files under `bin/`, `obj/`, `packages/` and `node_modules/` are ignored,
+  and so are test projects (test SDK/framework references, `IsTestProject`,
+  or a `.Tests` name).
+- One project left: that one. Several: the single deployable one (web SDK,
+  web project type, `Web.config` beside it, or an `Exe`/`WinExe` output).
+- Otherwise (none found, only tests, or several deployable) nothing is
+  guessed: the placeholder stays, `version_file` stays blank (the shared
+  template then falls back to its own discovery), and the MR gets a
+  ".csproj path" checklist item naming the candidates.
+
 ## Known gaps
 
 - Every file under `files/` still has `TODO` placeholders (mirror URLs,
   credentials) except `nuget.config`, which has the real Artifactory NuGet
   feed -- fill in real values for the rest before relying on this.
   `bumpversion.cfg` is a separate case: its `<path to .csproj file>`
-  placeholder is inherently per-app, not a generic secret, so it can't be
-  filled in here -- the MR's checklist reminds the reviewer to fill it in
-  per project instead.
+  placeholder is per-app, so it is filled in from the detected .csproj (see "Detecting the .csproj").
 - **Several of these files only take effect if the *remote* pipeline
   template's script actually references them** -- `.npmrc` and
   `nuget.config` are auto-discovered by npm/NuGet with no extra step, but

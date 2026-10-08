@@ -2,6 +2,7 @@ package version
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -188,5 +189,12 @@ func TestEditorFor(t *testing.T) {
 		if got := EditorFor(path, []string{"conf/custom.props"}) != nil; got != want {
 			t.Errorf("EditorFor(%q) matched = %v, want %v", path, got, want)
 		}
+	}
+}
+
+func TestCsprojMatchesElementNamesCaseInsensitively(t *testing.T) {
+	out, old, err := Csproj([]byte("<Project><PropertyGroup><version>0.9.0</version></PropertyGroup></Project>"), "1.0.1")
+	if err != nil || old != "0.9.0" || !strings.Contains(string(out), "<version>1.0.1</version>") {
+		t.Errorf("got %q old=%q err=%v", out, old, err)
 	}
 }

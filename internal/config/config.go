@@ -107,6 +107,11 @@ type FileSpec struct {
 	// for every project that adds this template. Only meaningful when
 	// Source == SourceInclude; ignored for a local file.
 	ExtraVariables []ExtraVariable `yaml:"extra_variables,omitempty"`
+
+	// CsprojPlaceholder marks a local file containing the literal text
+	// `<path to .csproj file>` (bootstrap.CsprojPlaceholder) that is replaced
+	// with the project's detected .csproj path.
+	CsprojPlaceholder bool `yaml:"csproj_placeholder,omitempty"`
 }
 
 // ExtraVariable is one variable rendered into an include stub's `variables:`
@@ -133,7 +138,32 @@ type ExtraVariable struct {
 	Value       string   `yaml:"value"`
 	Description string   `yaml:"description,omitempty"`
 	Options     []string `yaml:"options,omitempty"`
+
+	// From, when set, takes the value from what was detected in the target
+	// project instead of Value. Only "csproj" exists: the repo-relative path
+	// of the .csproj to version/build, or blank when it can't be determined
+	// (leaving the shared template to fall back to its own discovery).
+	From string `yaml:"from,omitempty"`
 }
+
+// ResolvesCsproj reports whether any part of the template needs the target
+// project's .csproj path, so Plan knows to look for it.
+func (t *Template) ResolvesCsproj() bool {
+	for _, f := range t.Files {
+		if f.CsprojPlaceholder {
+			return true
+		}
+		for _, v := range f.ExtraVariables {
+			if v.From == FromCsproj {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// FromCsproj is the ExtraVariable.From value that selects the detected .csproj.
+const FromCsproj = "csproj"
 
 func (f FileSpec) IsLocal() bool {
 	return f.Source == SourceLocal
