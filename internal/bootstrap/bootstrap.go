@@ -25,6 +25,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 
@@ -36,10 +37,15 @@ import (
 type Bootstrapper struct {
 	Client    *gitlabclient.Client
 	Templates *config.Templates
+
+	// varDone remembers the variables already written in this run, so a group
+	// variable shared by every project of a group is written once.
+	varMu   sync.Mutex
+	varDone map[string]VarResult
 }
 
 func New(c *gitlabclient.Client, templates *config.Templates) *Bootstrapper {
-	return &Bootstrapper{Client: c, Templates: templates}
+	return &Bootstrapper{Client: c, Templates: templates, varDone: map[string]VarResult{}}
 }
 
 // FileDiff is the outcome of comparing one bundle file against the
@@ -93,6 +99,9 @@ type Plan struct {
 	// Skipped is why a project was deliberately left out of a batch (archived,
 	// empty, a fork, excluded); Apply passes it through as a "skipped" Result.
 	Skipped string `json:"skipped,omitempty"`
+	// Variables are the CI/CD variables the template sets in GitLab; Apply
+	// writes them.
+	Variables []VarDiff `json:"variables,omitempty"`
 }
 
 // Result is the outcome of Apply.
@@ -104,6 +113,8 @@ type Result struct {
 	Description string `json:"description"`
 	MRURL       string `json:"mr_url,omitempty"`
 	Error       string `json:"error,omitempty"`
+	// Variables is the outcome for each CI/CD variable the template sets.
+	Variables []VarResult `json:"variables,omitempty"`
 }
 
 func branchName(templateName string) string {
@@ -184,6 +195,8 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 			return nil, fmt.Errorf("checking %s: %w", f.TargetPath, err)
 		}
 	}
+
+	plan.Variables = b.planVariables(ctx, proj, tmpl)
 
 	edits, err := b.planVersionEdits(ctx, plan, tmpl, tree)
 	if err != nil {
@@ -335,6 +348,11 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 		return result, nil
 	}
 
+	// Variables first: they are idempotent, and a failure only adds an item to
+	// the MR description, so nothing below depends on them.
+	result.Variables = b.applyVariables(ctx, plan)
+	vars := variableSummary(result.Variables)
+
 	// The branch is recreated from BaseBranch, so every file is checked
 	// against BaseBranch, never the old branch's contents.
 	checkRef := plan.BaseBranch
@@ -379,6 +397,12 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	if len(actions) == 0 {
 		result.Status = "unchanged"
 		result.Description = "every file already matches the template, nothing to do"
+		if changedVariables(result.Variables) {
+			result.Status, result.Description = "applied", "files already match the template"
+		}
+		if vars != "" {
+			result.Description += "; " + vars
+		}
 		return result, nil
 	}
 
@@ -403,8 +427,11 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 		TargetBranch:       gitlab.Ptr(plan.BaseBranch),
 		RemoveSourceBranch: gitlab.Ptr(true),
 	}
-	if desc := mrDescription(b.Templates.Find(plan.Template), plan); desc != "" {
-		mrOpts.Description = gitlab.Ptr(desc)
+	var desc strings.Builder
+	desc.WriteString(mrDescription(b.Templates.Find(plan.Template), plan))
+	writeVariablesSection(&desc, result.Variables)
+	if desc.Len() > 0 {
+		mrOpts.Description = gitlab.Ptr(desc.String())
 	}
 
 	mr, _, err := b.Client.REST.MergeRequests.CreateMergeRequest(plan.ProjectID, mrOpts, gitlab.WithContext(ctx))
@@ -416,6 +443,9 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	result.Description = fmt.Sprintf("opened MR !%d with %d file(s)", mr.IID, len(actions))
 	if replaced != "" {
 		result.Description += "; replaced previous attempt (" + replaced + ")"
+	}
+	if vars != "" {
+		result.Description += "; " + vars
 	}
 	result.MRURL = mr.WebURL
 	return result, nil

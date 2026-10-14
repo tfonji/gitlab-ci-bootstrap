@@ -397,6 +397,29 @@ templates:
         source_path: files/npmrc
         source: local
   - name: node-iis-ci-cd
+    # Group-level, shared by every IIS template. Plain (unmasked) values; an
+    # existing value is overwritten so the whole group behaves the same.
+    ci_variables: &iis_deploy_when
+      - name: DEVELOPMENT_DEPLOY_WHEN
+        value: on_success
+        scope: group
+        group: top
+      - name: TESTING_DEPLOY_WHEN
+        value: on_success
+        scope: group
+        group: top
+      - name: STAGING_DEPLOY_WHEN
+        value: on_success
+        scope: group
+        group: top
+      - name: STAGING_DR_DEPLOY_WHEN
+        value: on_success
+        scope: group
+        group: top
+      - name: PERFORMANCE_DEPLOY_WHEN
+        value: on_success
+        scope: group
+        group: top
     files:
       - target_path: .gitlab-ci.yml
         source_path: templates/node-iis-ci-cd.gitlab.yml
@@ -429,11 +452,6 @@ templates:
         - ARTIFACTORY_NODE_PROD_REPO
         - ARTIFACTORY_NODE_VIRTUAL_REPO
       per_project:
-        - DEVELOPMENT_DEPLOY_WHEN
-        - TESTING_DEPLOY_WHEN
-        - STAGING_DEPLOY_WHEN
-        - STAGING_DR_DEPLOY_WHEN
-        - PERFORMANCE_DEPLOY_WHEN
       per_environment:
         environments: [ development, testing, staging, staging-dr, performance, production, production-dr ]
         variables:
@@ -448,7 +466,6 @@ templates:
         - "Set `IIS_APPPOOL`, `DEPLOY_PATH`, and `BACKUP_ROOT` for every environment -- the shared template's defaults are leftovers from another app (`ConfigManagementAPIPool`, `D:\\Inetpub\\WWWRoot\\ConfigManager-Api`, `D:\\backup\\inetpub\\wwwroot\\ConfigManager-Api`), and `IIS_SITE` defaults to `Default Web Site`."
         - "Set `DEPLOY_PATH` to exactly the IIS site's physical path -- the deploy job's validation step compares the two and throws before deploying anything if they differ."
         - "Set `is_angular_build` to `false` if this is not an Angular app -- the shared template defaults it to `true`, which makes the build run `ng build` from `src/` and the publish job package `dist/`. For an Angular app, keep the sources under `src/` and set `ANGULAR_CLI_VERSION` to the version this app uses (default `11`)."
-        - "Set `DEVELOPMENT_DEPLOY_WHEN`, `TESTING_DEPLOY_WHEN`, `STAGING_DEPLOY_WHEN`, `STAGING_DR_DEPLOY_WHEN`, and `PERFORMANCE_DEPLOY_WHEN` to `on_success` as project variables -- that is the default; for an environment whose deploy should behave differently, use `on_failure`, `always`, `manual`, or `never` instead."
   - name: node-lambda-ci-cd
     files:
       - target_path: .gitlab-ci.yml
@@ -579,6 +596,7 @@ templates:
 
   # --- .NET (IIS is the default target; core vs framework by .csproj content) ---
   - name: dotnet-core-iis-ci-cd
+    ci_variables: *iis_deploy_when
     # This template's bumpVersion() seds a lowercase <version> tag, so that is
     # the spelling written into a .csproj that has no version yet.
     csproj_version_element: version
@@ -629,11 +647,6 @@ templates:
       - BuildPlatform
       - ARTIFACT_STAGING
       - ARTIFACT_NAME
-      - DEVELOPMENT_DEPLOY_WHEN
-      - TESTING_DEPLOY_WHEN
-      - STAGING_DEPLOY_WHEN
-      - STAGING_DR_DEPLOY_WHEN
-      - PERFORMANCE_DEPLOY_WHEN
       per_environment:
         environments: [development, testing, staging, staging-dr, performance, production, production-dr]
         variables:
@@ -646,8 +659,8 @@ templates:
         - BACKUP_ROOT
       notes:
       - "`ARTIFACT_NAME` must exactly match the `<ApplicationName>` tag in the .csproj -- `package:download` names the file after `<ApplicationName>`, and the IIS deploy jobs look for `ARTIFACT_NAME` when finding it locally. A mismatch means deploy can't find the artifact."
-      - "Set `DEVELOPMENT_DEPLOY_WHEN`, `TESTING_DEPLOY_WHEN`, `STAGING_DEPLOY_WHEN`, `STAGING_DR_DEPLOY_WHEN`, and `PERFORMANCE_DEPLOY_WHEN` to `on_success` as project variables -- that is the default; for an environment whose deploy should behave differently, use `on_failure`, `always`, `manual`, or `never` instead."
   - name: dotnet-framework-iis-ci-cd
+    ci_variables: *iis_deploy_when
     csproj_application_name: true
     files:
       - target_path: .gitlab-ci.yml
@@ -695,11 +708,6 @@ templates:
       - GITLAB_PUBLISH
       - IS_MSDEPLOY
       - TestAssemblyFilter
-      - DEVELOPMENT_DEPLOY_WHEN
-      - TESTING_DEPLOY_WHEN
-      - STAGING_DEPLOY_WHEN
-      - STAGING_DR_DEPLOY_WHEN
-      - PERFORMANCE_DEPLOY_WHEN
       per_environment:
         environments: [development, testing, staging, staging-dr, performance, production, production-dr]
         variables:
@@ -713,7 +721,6 @@ templates:
         - BACKUP_ROOT
       notes:
       - "`package:test`'s script reads `TestAssemblyFilter` and `VSTEST_PATH`, neither of which the shared template defines anywhere -- without them `Get-ChildItem -Filter $env:TestAssemblyFilter` matches nothing and the `vstest.console.exe` invocation has nothing to run, so the job silently produces no test results (it won't fail the pipeline itself since `package:test` is `allow_failure: true`). `TestAssemblyFilter` is per-app (e.g. `*.Tests.dll`); `VSTEST_PATH` looks like a fixed path on the shared Windows runner pool, so confirm it already exists at group level rather than assuming -- we don't have independent confirmation of that the way we do for `ARTIFACTORY_URL` elsewhere."
-      - "Set `DEVELOPMENT_DEPLOY_WHEN`, `TESTING_DEPLOY_WHEN`, `STAGING_DEPLOY_WHEN`, `STAGING_DR_DEPLOY_WHEN`, and `PERFORMANCE_DEPLOY_WHEN` to `on_success` as project variables -- that is the default; for an environment whose deploy should behave differently, use `on_failure`, `always`, `manual`, or `never` instead."
   - name: dotnet-ansible-ci-cd
     files:
       - target_path: .gitlab-ci.yml

@@ -51,6 +51,10 @@ type Template struct {
 	// the template's pipeline names the build artifact after.
 	CsprojApplicationName bool `yaml:"csproj_application_name,omitempty"`
 
+	// Variables are CI/CD variables this tool creates or updates in GitLab when
+	// the template is applied, at group or project level (see CIVariable).
+	Variables []CIVariable `yaml:"ci_variables,omitempty"`
+
 	Detect                []string `yaml:"detect,omitempty"`
 	DetectContentContains string   `yaml:"detect_content_contains,omitempty"`
 }
@@ -122,6 +126,54 @@ type FileSpec struct {
 	// `<path to .csproj file>` (bootstrap.CsprojPlaceholder) that is replaced
 	// with the project's detected .csproj path.
 	CsprojPlaceholder bool `yaml:"csproj_placeholder,omitempty"`
+}
+
+// CIVariable scopes and levels.
+const (
+	ScopeGroup   = "group"
+	ScopeProject = "project"
+	// GroupTop is the top-level group of the project's path; GroupParent is the
+	// group (or subgroup) directly containing it.
+	GroupTop    = "top"
+	GroupParent = "parent"
+)
+
+// CIVariable is a CI/CD variable set in GitLab itself (not in a file in the
+// repo). Unlike mr_checklist entries, which only remind a reviewer, these are
+// written by Apply.
+type CIVariable struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+	// Scope is ScopeGroup or ScopeProject.
+	Scope string `yaml:"scope"`
+	// Group picks which group holds a ScopeGroup variable: GroupTop (default)
+	// or GroupParent.
+	Group string `yaml:"group,omitempty"`
+	// EnvironmentScope is the variable's GitLab environment scope ("*" if empty).
+	EnvironmentScope string `yaml:"environment_scope,omitempty"`
+	// Masked and Protected default to false: the variable is plain and visible.
+	Masked    bool `yaml:"masked,omitempty"`
+	Protected bool `yaml:"protected,omitempty"`
+	// Overwrite (default true) replaces an existing variable that differs; when
+	// false an existing one is left alone and only reported.
+	Overwrite *bool `yaml:"overwrite,omitempty"`
+}
+
+// ShouldOverwrite applies the default of true.
+func (v CIVariable) ShouldOverwrite() bool { return v.Overwrite == nil || *v.Overwrite }
+
+func (v CIVariable) validate() error {
+	switch {
+	case v.Name == "":
+		return fmt.Errorf("ci_variables entry has no name")
+	case v.Scope != ScopeGroup && v.Scope != ScopeProject:
+		return fmt.Errorf("ci_variables %s: scope must be %q or %q, got %q", v.Name, ScopeGroup, ScopeProject, v.Scope)
+	case v.Group != "" && v.Group != GroupTop && v.Group != GroupParent:
+		return fmt.Errorf("ci_variables %s: group must be %q or %q, got %q", v.Name, GroupTop, GroupParent, v.Group)
+	case v.Group != "" && v.Scope != ScopeGroup:
+		return fmt.Errorf("ci_variables %s: group only applies to scope %q", v.Name, ScopeGroup)
+	}
+	return nil
 }
 
 // ExtraVariable is one variable rendered into an include stub's `variables:`
@@ -208,6 +260,13 @@ func LoadTemplates(path string) (*Templates, error) {
 	}
 	if err := yaml.Unmarshal(data, &tpl); err != nil {
 		return nil, fmt.Errorf("parsing templates %s: %w", path, err)
+	}
+	for _, t := range tpl.Templates {
+		for _, v := range t.Variables {
+			if err := v.validate(); err != nil {
+				return nil, fmt.Errorf("template %s: %w", t.Name, err)
+			}
+		}
 	}
 	return &tpl, nil
 }

@@ -148,6 +148,34 @@ export GITLAB_TOKEN=...
 ./bin/gitlab-ci-bootstrap apply --plan=plan.json --out=result.json
 ```
 
+## Setting CI/CD variables in GitLab
+
+A template can list `ci_variables` in `templates.yaml`; `apply` creates or
+updates them in GitLab (the plan shows what would change):
+
+```yaml
+ci_variables:
+  - name: STAGING_DEPLOY_WHEN
+    value: on_success
+    scope: group        # group | project
+    group: top          # top (default) | parent -- for scope: group
+    # masked / protected: false by default (plain, visible value)
+    # overwrite: true by default; false leaves an existing value alone
+    # environment_scope: "*" by default
+```
+
+- `scope: group, group: top` is the first segment of the project's path (`acme` for `acme/team/app`); `parent` is the
+  group directly containing it.
+  A project in a personal namespace has no group, so those variables are listed
+  in the MR for someone to set by hand.
+- The five `*_DEPLOY_WHEN` variables of the three IIS templates use this (`on_success`, top-level group, unmasked,
+  overwritten).
+- In a group run the same group variable is written once.
+- The token needs to be allowed to manage CI/CD variables on that group (typically Owner) and on the project
+  (Maintainer). If a write is refused, the
+  MR is still opened and gets a "CI/CD variables to set by hand" item.
+- Masked values are never printed in logs or the MR.
+
 ## Files without a version
 
 A version-carrying file that exists but declares no version gets one, so the

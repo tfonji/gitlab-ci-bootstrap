@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,6 +34,75 @@ type fakeGitLab struct {
 	mrBody       map[string]any
 	mrCount      int
 	groupQuery   map[string]string // include_subgroups / with_shared as last requested
+
+	// CI/CD variables, keyed "<group path>/<NAME>" and "<NAME>" (project 7).
+	groupVars, projectVars map[string]string
+	denyVarWrite           bool
+	personalNamespace      bool
+}
+
+// variables serves the group and project variable endpoints; it reports
+// whether the request was one of them.
+func (f *fakeGitLab) variables(w http.ResponseWriter, r *http.Request) bool {
+	path := r.URL.Path
+	var store map[string]string
+	var owner, rest string
+	switch {
+	case strings.HasPrefix(path, "/api/v4/groups/") && strings.Contains(path, "/variables"):
+		i := strings.Index(path, "/variables")
+		owner, rest, store = strings.TrimPrefix(path[:i], "/api/v4/groups/"), path[i+len("/variables"):], f.groupVars
+	case strings.HasPrefix(path, "/api/v4/projects/7/variables"):
+		owner, rest, store = "", strings.TrimPrefix(path, "/api/v4/projects/7/variables"), f.projectVars
+	default:
+		return false
+	}
+	prefix := ""
+	if owner != "" {
+		prefix = owner + "/"
+	}
+	kind := "project-var"
+	if owner != "" {
+		kind = "group-var"
+	}
+	reply := func(key, value string) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"key": key, "value": value, "masked": false, "protected": false, "environment_scope": "*"})
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name := strings.TrimPrefix(rest, "/")
+	switch r.Method {
+	case http.MethodGet:
+		v, ok := store[prefix+name]
+		if !ok {
+			http.NotFound(w, r)
+			return true
+		}
+		reply(name, v)
+	case http.MethodPut, http.MethodPost:
+		if f.denyVarWrite {
+			http.Error(w, `{"message":"403 Forbidden"}`, http.StatusForbidden)
+			return true
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		value, _ := body["value"].(string)
+		if r.Method == http.MethodPut {
+			if _, ok := store[prefix+name]; !ok {
+				http.NotFound(w, r)
+				return true
+			}
+			f.calls = append(f.calls, fmt.Sprintf("%s update %s%s=%s", kind, prefix, name, value))
+		} else {
+			name, _ = body["key"].(string)
+			f.calls = append(f.calls, fmt.Sprintf("%s create %s%s=%s", kind, prefix, name, value))
+		}
+		store[prefix+name] = value
+		reply(name, value)
+	default:
+		http.NotFound(w, r)
+	}
+	return true
 }
 
 func (f *fakeGitLab) record(call string) {
@@ -46,6 +116,9 @@ func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON := func(v any) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
+	}
+	if f.variables(w, r) {
+		return
 	}
 	switch {
 	case r.URL.Path == "/api/v4/groups/5/projects":
@@ -72,7 +145,11 @@ func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/v4/groups/404/projects":
 		http.Error(w, `{"message":"404 Group Not Found"}`, http.StatusNotFound)
 	case r.URL.Path == "/api/v4/projects/7":
-		writeJSON(map[string]any{"id": 7, "path_with_namespace": "acme/app", "default_branch": "main"})
+		namespace := map[string]any{"kind": "group", "full_path": "acme/team"}
+		if f.personalNamespace {
+			namespace = map[string]any{"kind": "user", "full_path": "someone"}
+		}
+		writeJSON(map[string]any{"id": 7, "path_with_namespace": "acme/app", "default_branch": "main", "namespace": namespace})
 	case p == "/repository/tags":
 		var tags []map[string]any
 		for _, t := range f.tags {
@@ -165,6 +242,15 @@ func newTestBootstrapper(t *testing.T, fake *fakeGitLab) *Bootstrapper {
 			Files: []config.FileSpec{
 				{TargetPath: ".gitlab-ci.yml", SourcePath: "templates/demo.gitlab.yml"},
 				{TargetPath: "version.txt", SourcePath: versionTxt, Source: config.SourceLocal},
+			},
+		}, {
+			Name:  "vars",
+			Files: []config.FileSpec{{TargetPath: ".gitlab-ci.yml", SourcePath: "templates/vars.gitlab.yml"}},
+			Variables: []config.CIVariable{
+				{Name: "A_WHEN", Value: "on_success", Scope: config.ScopeGroup, Group: config.GroupTop},
+				{Name: "B_WHEN", Value: "on_success", Scope: config.ScopeGroup, Group: config.GroupParent},
+				{Name: "KEEP", Value: "x", Scope: config.ScopeGroup, Overwrite: ptr(false)},
+				{Name: "P_VAR", Value: "1", Scope: config.ScopeProject},
 			},
 		}, {
 			Name:                  "dotnet",
@@ -844,5 +930,160 @@ func TestPickSolution(t *testing.T) {
 		if got != tc.want || (tc.wantIssue == "") != (issue == "") || !strings.Contains(issue, tc.wantIssue) {
 			t.Errorf("%s: got (%q, %q), want (%q, issue containing %q)", name, got, issue, tc.want, tc.wantIssue)
 		}
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func newVarsFake() *fakeGitLab {
+	return &fakeGitLab{
+		files:       map[string]string{},
+		groupVars:   map[string]string{"acme/A_WHEN": "manual", "acme/KEEP": "y"},
+		projectVars: map[string]string{},
+	}
+}
+
+func TestPlanVariablesFindsWhatToCreateUpdateAndLeaveAlone(t *testing.T) {
+	b := newTestBootstrapper(t, newVarsFake())
+	plan, err := b.Plan(context.Background(), 7, "vars")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]VarDiff{}
+	for _, v := range plan.Variables {
+		got[v.Name] = v
+	}
+	for name, want := range map[string]struct{ action, target string }{
+		"A_WHEN": {"update", "acme"},      // top-level group of acme/team, currently "manual"
+		"B_WHEN": {"create", "acme/team"}, // parent group
+		"KEEP":   {"skipped", "acme"},     // exists, overwrite off
+		"P_VAR":  {"create", "acme/app"},  // project scope
+	} {
+		if v := got[name]; v.Action != want.action || v.Target != want.target {
+			t.Errorf("%s: action %q on %q, want %q on %q (%s)", name, v.Action, v.Target, want.action, want.target, v.Description)
+		}
+	}
+	if d := got["A_WHEN"].Description; d != "manual → on_success" {
+		t.Errorf("A_WHEN description = %q", d)
+	}
+}
+
+func TestApplyWritesVariablesAndLeavesProtectedChoicesAlone(t *testing.T) {
+	fake := newVarsFake()
+	b := newTestBootstrapper(t, fake)
+	plan, err := b.Plan(context.Background(), 7, "vars")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := b.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if fake.groupVars["acme/A_WHEN"] != "on_success" || fake.groupVars["acme/team/B_WHEN"] != "on_success" || fake.projectVars["P_VAR"] != "1" {
+		t.Errorf("variables not written: group=%v project=%v", fake.groupVars, fake.projectVars)
+	}
+	if fake.groupVars["acme/KEEP"] != "y" {
+		t.Errorf("KEEP must not be overwritten: %v", fake.groupVars)
+	}
+	status := map[string]string{}
+	for _, r := range result.Variables {
+		status[r.Name] = r.Status
+	}
+	want := map[string]string{"A_WHEN": "updated", "B_WHEN": "created", "KEEP": "skipped", "P_VAR": "created"}
+	for name, st := range want {
+		if status[name] != st {
+			t.Errorf("%s status = %q, want %q (all: %v)", name, status[name], st, status)
+		}
+	}
+	if !strings.Contains(result.Description, "variables: 2 created, 1 updated, 1 skipped") {
+		t.Errorf("description = %q", result.Description)
+	}
+	if desc, _ := fake.mrBody["description"].(string); strings.Contains(desc, "to set by hand") {
+		t.Errorf("MR must not ask for variables the tool set:\n%s", desc)
+	}
+}
+
+func TestApplyWritesASharedGroupVariableOnlyOnce(t *testing.T) {
+	fake := newVarsFake()
+	b := newTestBootstrapper(t, fake)
+	plan, _ := b.Plan(context.Background(), 7, "vars")
+
+	if _, err := b.Apply(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	second, err := b.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writes := 0
+	for _, c := range fake.calls {
+		if c == "group-var update acme/A_WHEN=on_success" {
+			writes++
+		}
+	}
+	if writes != 1 {
+		t.Errorf("A_WHEN written %d times, want once: %v", writes, fake.calls)
+	}
+	for _, r := range second.Variables {
+		if r.Name == "A_WHEN" && r.Status != "unchanged" {
+			t.Errorf("second run A_WHEN = %q, want unchanged", r.Status)
+		}
+	}
+}
+
+func TestApplyAsksForVariablesByHandWhenItCannotSetThem(t *testing.T) {
+	fake := newVarsFake()
+	fake.denyVarWrite = true
+	b := newTestBootstrapper(t, fake)
+	plan, _ := b.Plan(context.Background(), 7, "vars")
+
+	result, err := b.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "applied" || result.MRURL == "" {
+		t.Fatalf("the MR must still be opened: %+v", result)
+	}
+	desc, _ := fake.mrBody["description"].(string)
+	for _, want := range []string{
+		"## CI/CD variables to set by hand",
+		"- [ ] Set the CI/CD variable `A_WHEN` to `on_success` in group `acme`",
+		"- [ ] Set the CI/CD variable `P_VAR` to `1` in project `acme/app`",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("MR description missing %q:\n%s", want, desc)
+		}
+	}
+	if strings.Contains(desc, "`KEEP`") {
+		t.Errorf("a variable deliberately left alone is not a to-do:\n%s", desc)
+	}
+}
+
+func TestVariablesNeedAGroupToLiveIn(t *testing.T) {
+	fake := newVarsFake()
+	fake.personalNamespace = true
+	b := newTestBootstrapper(t, fake)
+	plan, _ := b.Plan(context.Background(), 7, "vars")
+	for _, v := range plan.Variables {
+		if v.Scope == config.ScopeGroup && v.Action != "unavailable" {
+			t.Errorf("%s: action %q in a personal namespace, want unavailable", v.Name, v.Action)
+		}
+		if v.Scope == config.ScopeProject && v.Action != "create" {
+			t.Errorf("project variable %s should still be created: %q", v.Name, v.Action)
+		}
+	}
+}
+
+func TestMaskedValuesAreNeverShown(t *testing.T) {
+	d := VarDiff{Value: "s3cret", Masked: true}
+	if d.ShownValue() != "***" {
+		t.Errorf("ShownValue = %q", d.ShownValue())
+	}
+	var b strings.Builder
+	writeVariablesSection(&b, []VarResult{{Scope: config.ScopeProject, Target: "a/b", Name: "TOKEN", Value: "s3cret", Masked: true, Status: "failed", Detail: "403"}})
+	if strings.Contains(b.String(), "s3cret") {
+		t.Errorf("masked value leaked into the MR description: %s", b.String())
 	}
 }

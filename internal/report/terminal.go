@@ -88,6 +88,13 @@ func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
 			unchanged++
 		}
 	}
+	if len(plan.Variables) > 0 {
+		t.println(t.paint(ansiBold, "CI/CD variables"))
+		for _, v := range plan.Variables {
+			symbol, color := varSymbolColor(v.Action)
+			t.println(fmt.Sprintf("  %s %s %s: %s=%s — %s", t.paint(color, symbol), v.Scope, v.Target, v.Name, v.ShownValue(), v.Description))
+		}
+	}
 	t.rule()
 	t.println(fmt.Sprintf("%s — %d create, %d update, %d unchanged, %d need a manual edit (no changes made)",
 		t.paint(ansiBold+ansiBlue, "~ Plan complete"), create, update, unchanged, manual))
@@ -110,6 +117,18 @@ func (t *Terminal) WriteResult(plan *bootstrap.Plan, result *bootstrap.Result) {
 		}
 	default:
 		t.println(t.paint(ansiBold+ansiDim, "· "+strings.ToUpper(result.Status[:1])+result.Status[1:]) + " — " + result.Description)
+	}
+	if len(result.Variables) > 0 {
+		t.println("")
+		t.println(t.paint(ansiBold, "CI/CD variables"))
+		for _, v := range result.Variables {
+			symbol, color := resultVarSymbolColor(v.Status)
+			line := fmt.Sprintf("  %s %s %s: %s=%s — %s", t.paint(color, symbol), v.Scope, v.Target, v.Name, v.ShownValue(), v.Status)
+			if v.Detail != "" {
+				line += ": " + v.Detail
+			}
+			t.println(line)
+		}
 	}
 	if result.MRURL != "" {
 		t.println("")
@@ -201,6 +220,34 @@ func (t *Terminal) header(title string, plan *bootstrap.Plan) {
 		t.println(fmt.Sprintf("%s %s → %s", t.paint(ansiBold, "Branch:  "), plan.Branch, plan.BaseBranch))
 	}
 	t.rule()
+}
+
+func varSymbolColor(action string) (symbol, color string) {
+	switch action {
+	case "create":
+		return "+", ansiGreen
+	case "update":
+		return "~", ansiYellow
+	case "unknown":
+		return "?", ansiYellow
+	case "unavailable":
+		return "✗", ansiRed
+	default:
+		return "·", ansiDim
+	}
+}
+
+func resultVarSymbolColor(status string) (symbol, color string) {
+	switch status {
+	case "created":
+		return "+", ansiGreen
+	case "updated":
+		return "~", ansiYellow
+	case "failed":
+		return "✗", ansiRed
+	default:
+		return "·", ansiDim
+	}
 }
 
 func fileSymbolColor(action string) (symbol, color string) {
