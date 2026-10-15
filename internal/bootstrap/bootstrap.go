@@ -50,9 +50,12 @@ func New(c *gitlabclient.Client, templates *config.Templates) *Bootstrapper {
 
 // FileDiff is the outcome of comparing one bundle file against the
 // project's current default branch.
+// ActionDelete is the FileDiff action for a file the MR removes.
+const ActionDelete = "delete"
+
 type FileDiff struct {
 	TargetPath string `json:"target_path"`
-	// Action is "create", "update", "unchanged", or "skipped" (an existing
+	// Action is "create", "update", "delete", "unchanged", or "skipped" (an existing
 	// version file that has no literal version to rewrite -- needs a manual edit).
 	Action      string `json:"action"`
 	Description string `json:"description"`
@@ -203,6 +206,12 @@ func (b *Bootstrapper) Plan(ctx context.Context, projectID int64, templateName s
 		return nil, err
 	}
 	plan.Files = append(plan.Files, edits...)
+
+	bundled := map[string]bool{}
+	for _, f := range tmpl.Files {
+		bundled[f.TargetPath] = true
+	}
+	plan.Files = append(plan.Files, planAzureDeletes(tree, bundled)...)
 	return plan, nil
 }
 
@@ -361,6 +370,20 @@ func (b *Bootstrapper) Apply(ctx context.Context, plan *Plan) (*Result, error) {
 	var actions []*gitlab.CommitActionOptions
 	for _, f := range plan.Files {
 		if f.Action == "unchanged" || f.Action == "skipped" {
+			continue
+		}
+		if f.Action == ActionDelete {
+			// Re-check against the base branch: it may have moved since the plan.
+			if _, _, err := b.Client.REST.RepositoryFiles.GetFile(plan.ProjectID, f.TargetPath, &gitlab.GetFileOptions{
+				Ref: gitlab.Ptr(checkRef),
+			}, gitlab.WithContext(ctx)); err == nil {
+				actions = append(actions, &gitlab.CommitActionOptions{
+					Action:   gitlab.Ptr(gitlab.FileDelete),
+					FilePath: gitlab.Ptr(f.TargetPath),
+				})
+			} else if !isNotFound(err) {
+				return nil, fmt.Errorf("checking %s: %w", f.TargetPath, err)
+			}
 			continue
 		}
 		var content string
@@ -533,6 +556,7 @@ func mrDescription(tmpl *config.Template, plan *Plan) string {
 	writeVersionSection(&b, plan)
 	writeCsprojSection(&b, tmpl, plan)
 	writeSolutionSection(&b, tmpl, plan)
+	writeRemovedSection(&b, plan)
 
 	var checklist *config.MRChecklist
 	if tmpl != nil {

@@ -73,7 +73,7 @@ func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
 		t.println(t.paint(ansiYellow, "! solution not set") + " — " + plan.SolutionIssue + " (the MR asks for it by hand)")
 	}
 	t.println(t.paint(ansiBold, "Files"))
-	create, update, unchanged, manual := 0, 0, 0, 0
+	create, update, remove, unchanged, manual := 0, 0, 0, 0, 0
 	for _, f := range plan.Files {
 		symbol, color := fileSymbolColor(f.Action)
 		t.println(fmt.Sprintf("  %s %s — %s", t.paint(color, symbol), f.TargetPath, f.Description))
@@ -82,6 +82,8 @@ func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
 			create++
 		case "update":
 			update++
+		case bootstrap.ActionDelete:
+			remove++
 		case "skipped":
 			manual++
 		default:
@@ -96,8 +98,8 @@ func (t *Terminal) WritePlan(plan *bootstrap.Plan) {
 		}
 	}
 	t.rule()
-	t.println(fmt.Sprintf("%s — %d create, %d update, %d unchanged, %d need a manual edit (no changes made)",
-		t.paint(ansiBold+ansiBlue, "~ Plan complete"), create, update, unchanged, manual))
+	t.println(fmt.Sprintf("%s — %d create, %d update, %d delete, %d unchanged, %d need a manual edit (no changes made)",
+		t.paint(ansiBold+ansiBlue, "~ Plan complete"), create, update, remove, unchanged, manual))
 	t.println("")
 }
 
@@ -154,7 +156,7 @@ func (t *Terminal) WritePlanSummary(plans []*bootstrap.Plan) {
 			planned++
 			changes := 0
 			for _, f := range p.Files {
-				if f.Action == "create" || f.Action == "update" {
+				if f.Action == "create" || f.Action == "update" || f.Action == bootstrap.ActionDelete {
 					changes++
 				}
 			}
@@ -258,6 +260,8 @@ func fileSymbolColor(action string) (symbol, color string) {
 		return "~", ansiYellow
 	case "skipped":
 		return "!", ansiYellow
+	case bootstrap.ActionDelete:
+		return "-", ansiRed
 	default:
 		return "·", ansiDim
 	}

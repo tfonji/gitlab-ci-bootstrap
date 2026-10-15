@@ -148,6 +148,16 @@ export GITLAB_TOKEN=...
 ./bin/gitlab-ci-bootstrap apply --plan=plan.json --out=result.json
 ```
 
+## Removing Azure DevOps files
+
+For every template, the MR deletes any `.yml`/`.yaml` file whose name starts
+with `azure` (case-insensitive, optional leading dot), anywhere in the repo:
+`azure-pipelines.yml`, `ci/azure-pipelines-ci.yaml`, `.azure-pipelines.yml`.
+Folders like `node_modules`, `bin`, `obj` and `packages` are ignored. The match
+is by name only, so the MR lists every removed file under "Removed files" and
+asks the reviewer to confirm each one was only used by Azure DevOps. The plan
+shows them as deletes (`-`).
+
 ## Setting CI/CD variables in GitLab
 
 A template can list `ci_variables` in `templates.yaml`; `apply` creates or

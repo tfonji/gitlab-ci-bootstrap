@@ -1087,3 +1087,103 @@ func TestMaskedValuesAreNeverShown(t *testing.T) {
 		t.Errorf("masked value leaked into the MR description: %s", b.String())
 	}
 }
+
+func TestIsAzureFile(t *testing.T) {
+	for p, want := range map[string]bool{
+		"azure-pipelines.yml":                  true,
+		"azure-pipelines.yaml":                 true,
+		"Azure-Deploy.YML":                     true,
+		".azure-pipelines.yml":                 true,
+		"ci/azure-pipelines-ci.yml":            true,
+		"deep/er/azure.yaml":                   true,
+		"my-azure.yml":                         false, // doesn't start with azure
+		"azure-pipelines.json":                 false,
+		"azure.txt":                            false,
+		"README.md":                            false,
+		"node_modules/pkg/azure-pipelines.yml": false, // dependency folder
+		"bin/Debug/azure.yml":                  false,
+	} {
+		if got := isAzureFile(p); got != want {
+			t.Errorf("isAzureFile(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+func azureFixture() *fakeGitLab {
+	return &fakeGitLab{files: map[string]string{
+		"azure-pipelines.yml":    "trigger: [main]",
+		"build/azure-steps.yaml": "steps: []",
+		"README.md":              "keep",
+		"my-azure.yml":           "keep",
+		"web.config":             "keep",
+	}}
+}
+
+func TestPlanDeletesAzureFiles(t *testing.T) {
+	b := newTestBootstrapper(t, azureFixture())
+	plan, err := b.Plan(context.Background(), 7, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := planFiles(plan)
+	for _, p := range []string{"azure-pipelines.yml", "build/azure-steps.yaml"} {
+		if files[p].Action != ActionDelete {
+			t.Errorf("%s: %+v, want a delete", p, files[p])
+		}
+	}
+	for _, p := range []string{"README.md", "my-azure.yml", "web.config"} {
+		if _, ok := files[p]; ok {
+			t.Errorf("%s must not be touched", p)
+		}
+	}
+}
+
+func TestApplyCommitsTheAzureDeletesAndAsksForConfirmation(t *testing.T) {
+	fake := azureFixture()
+	b := newTestBootstrapper(t, fake)
+	plan, err := b.Plan(context.Background(), 7, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := b.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "applied" {
+		t.Fatalf("result = %+v", result)
+	}
+
+	deleted := map[string]bool{}
+	for _, a := range fake.commit["actions"].([]any) {
+		m := a.(map[string]any)
+		if m["action"] == "delete" {
+			deleted[m["file_path"].(string)] = true
+			if c, ok := m["content"]; ok && c != "" && c != nil {
+				t.Errorf("a delete carries content: %v", m)
+			}
+		}
+	}
+	if len(deleted) != 2 || !deleted["azure-pipelines.yml"] || !deleted["build/azure-steps.yaml"] {
+		t.Errorf("deleted = %v", deleted)
+	}
+	desc, _ := fake.mrBody["description"].(string)
+	if !strings.Contains(desc, "## Removed files") || !strings.Contains(desc, "`azure-pipelines.yml`, `build/azure-steps.yaml`") {
+		t.Errorf("MR should list the removed files:\n%s", desc)
+	}
+}
+
+func TestApplySkipsAnAzureDeleteForAFileThatIsAlreadyGone(t *testing.T) {
+	fake := azureFixture()
+	b := newTestBootstrapper(t, fake)
+	plan, _ := b.Plan(context.Background(), 7, "demo")
+	delete(fake.files, "build/azure-steps.yaml") // removed from the base branch after planning
+
+	if _, err := b.Apply(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range fake.commit["actions"].([]any) {
+		if m := a.(map[string]any); m["file_path"] == "build/azure-steps.yaml" {
+			t.Errorf("tried to delete a file that no longer exists: %v", m)
+		}
+	}
+}
