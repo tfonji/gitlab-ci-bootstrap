@@ -893,3 +893,48 @@ templates:
         source_path: files/flyway.conf
         source: local
     detect: ["flyway.conf"]
+
+  # --- File deploy (CD only) ---
+  - name: filedeploy-cd
+    files:
+      - target_path: .gitlab-ci.yml
+        source_path: templates/filedeploy-cd.gitlab.yml
+        extra_variables:
+          - name: DEPLOY_VARIABLE
+            value: development
+            description: "Deployment environment for a manual run (development | testing | staging | staging-dr | performance | production | production-dr)"
+            options:
+              - development
+              - testing
+              - staging
+              - staging-dr
+              - performance
+              - production
+              - production-dr
+          - name: CREATE_RELEASE
+            value: "No"
+            description: "Create a release (tag) -- only takes effect on the master/hotfix branch (Yes | No)"
+            options:
+              - "Yes"
+              - "No"
+          # The shared template's own default, written out so a package.properties
+          # already in the project gets its version set along with the rest.
+          - name: PROPERTY_FILE
+            value: package.properties
+    mr_checklist:
+      group_level:
+        - ARTIFACTORY_USER
+        - ARTIFACTORY_PASSWORD
+      per_environment:
+        environments: [ development, testing, staging, staging-dr, performance, production, production-dr ]
+        variables:
+          - TARGET_HOST
+          - WINRM_USER
+          - WINRM_PASSWORD
+          - DEPLOY_PATH
+          - PACKAGE_FOLDER
+          - BACKUP_ENABLED
+      notes:
+        - "Set `DEPLOY_PATH` to a folder that holds only what this deployment ships -- the deploy job deletes everything inside it before extracting the package."
+        - "Set `BACKUP_ENABLED` to `true` (with `PACKAGE_FOLDER`) for every environment whose files you cannot recreate -- the job only writes a backup tar of the current `DEPLOY_PATH` when it is `true`, `yes` or `1`, and without one there is no way back after the folder is emptied."
+        - "Leave `CREATE_RELEASE` at `No` -- this template has no release job, and `Yes` switches off the development and testing deploy jobs on master and hotfix branches, so the pipeline would run nothing."

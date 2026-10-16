@@ -30,6 +30,7 @@ variables:
       - "dotnet-core-iis-ci-cd"
       - "dotnet-core-openshift-helm-ci-cd"
       - "dotnet-framework-iis-ci-cd"
+      - "filedeploy-cd"
       - "flyway-cd"
       - "java-ant-fileDeploy-ci-cd"
       - "java-ant-tomcat-ci-cd"

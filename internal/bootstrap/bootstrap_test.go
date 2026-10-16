@@ -1187,3 +1187,43 @@ func TestApplySkipsAnAzureDeleteForAFileThatIsAlreadyGone(t *testing.T) {
 		}
 	}
 }
+
+func TestFiledeployCDStubAndVersionedPackageProperties(t *testing.T) {
+	fake := &fakeGitLab{files: map[string]string{"package.properties": "name=app\n"}}
+	b := newTestBootstrapper(t, fake)
+	real, err := config.LoadTemplates("../../configs/templates.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Templates = real
+
+	plan, err := b.Plan(context.Background(), 7, "filedeploy-cd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := planFiles(plan)["package.properties"]; f.Action != "update" || !strings.HasPrefix(f.Description, noVersionYet) {
+		t.Errorf("package.properties should get a version: %+v", f)
+	}
+	stub, err := b.templateContentFor(plan, ".gitlab-ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`PROPERTY_FILE: "package.properties"`,
+		"DEPLOY_VARIABLE:",
+		`file: 'templates/filedeploy-cd.gitlab.yml'`,
+	} {
+		if !strings.Contains(stub, want) {
+			t.Errorf("stub missing %q:\n%s", want, stub)
+		}
+	}
+	desc := mrDescription(real.Find("filedeploy-cd"), plan)
+	for _, want := range []string{"`TARGET_HOST`", "`PACKAGE_FOLDER`", "`BACKUP_ENABLED`", "Leave `CREATE_RELEASE` at `No`"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("MR description missing %q:\n%s", want, desc)
+		}
+	}
+	if strings.Contains(desc, artifactoryOnboardingURL) {
+		t.Error("filedeploy-cd has no ci component, so no Artifactory onboarding link")
+	}
+}

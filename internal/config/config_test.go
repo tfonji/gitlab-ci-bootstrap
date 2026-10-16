@@ -3,8 +3,11 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestIISTemplatesSetTheDeployWhenVariablesAtTheTopLevelGroup(t *testing.T) {
@@ -49,5 +52,44 @@ func TestLoadTemplatesRejectsBadVariables(t *testing.T) {
 		if _, err := LoadTemplates(path); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
+	}
+}
+
+func TestTemplateDropdownListsEveryTemplateAlphabetically(t *testing.T) {
+	data, err := os.ReadFile("../../.gitlab-ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci struct {
+		Variables struct {
+			TemplateName struct {
+				Options []string `yaml:"options"`
+			} `yaml:"TEMPLATE_NAME"`
+		} `yaml:"variables"`
+	}
+	if err := yaml.Unmarshal(data, &ci); err != nil {
+		t.Fatal(err)
+	}
+	options := ci.Variables.TemplateName.Options
+	if !sort.StringsAreSorted(options) {
+		t.Errorf("TEMPLATE_NAME options must stay A-Z sorted: %v", options)
+	}
+
+	tpl, err := LoadTemplates("../../configs/templates.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inDropdown := map[string]bool{}
+	for _, o := range options {
+		inDropdown[o] = true
+	}
+	for _, tmpl := range tpl.Templates {
+		if !inDropdown[tmpl.Name] {
+			t.Errorf("template %q is missing from the TEMPLATE_NAME dropdown", tmpl.Name)
+		}
+		delete(inDropdown, tmpl.Name)
+	}
+	for extra := range inDropdown {
+		t.Errorf("dropdown offers %q, which is not in templates.yaml", extra)
 	}
 }
